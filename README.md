@@ -1,7 +1,7 @@
 # Whirlpool
 
 <p align="center">
-  <strong>Community-driven Android video player powered by a Rust engine via UniFFI.</strong>
+  <strong>Community-driven Hottub video player powered by a Rust engine via UniFFI for Android.</strong>
 </p>
 
 <p align="center">

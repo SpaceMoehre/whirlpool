@@ -3,7 +3,6 @@ package com.whirlpool.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,7 +45,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -736,7 +734,6 @@ private fun PlayerMode(
     var scrubPositionMs by remember { mutableStateOf(0L) }
     var hudVisible by remember { mutableStateOf(true) }
     var hudTimerToken by remember { mutableStateOf(0) }
-    val hiddenCenterTapInteraction = remember { MutableInteractionSource() }
 
     val keepHudVisible = {
         hudVisible = true
@@ -754,7 +751,8 @@ private fun PlayerMode(
         0f
     }
     val hudAlpha by animateFloatAsState(
-        targetValue = if (hudVisible) 1f else 0f,
+        // Keep controls virtually invisible instead of fully removed so their click targets stay active.
+        targetValue = if (hudVisible) 1f else 0.001f,
         label = "hudAlpha",
     )
 
@@ -786,27 +784,6 @@ private fun PlayerMode(
             },
             onSurfaceTap = keepHudVisible,
             modifier = Modifier.fillMaxSize(),
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { keepHudVisible() })
-                },
-        )
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .size(120.dp)
-                .clickable(
-                    enabled = !hudVisible,
-                    interactionSource = hiddenCenterTapInteraction,
-                    indication = null,
-                ) {
-                    togglePlayback()
-                },
         )
 
         Box(
@@ -918,6 +895,7 @@ private fun PlayerMode(
                 }
             }
         }
+
     }
 }
 
