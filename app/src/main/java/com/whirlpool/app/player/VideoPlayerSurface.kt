@@ -17,10 +17,18 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 private const val DefaultUserAgent =
     "Mozilla/5.0 (Linux; Android 14; Whirlpool) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+
+data class VideoPlayerControls(
+    val seekByMs: (Long) -> Unit,
+    val seekToMs: (Long) -> Unit,
+    val togglePlayPause: () -> Boolean,
+)
 
 @Composable
 fun VideoPlayerSurface(
@@ -28,6 +36,8 @@ fun VideoPlayerSurface(
     requestHeaders: Map<String, String>,
     onPlaybackError: (String) -> Unit,
     onPlaybackEvent: (String) -> Unit,
+    onTimelineChanged: (positionMs: Long, durationMs: Long, isPlaying: Boolean) -> Unit,
+    onControlsReady: (VideoPlayerControls) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -66,6 +76,38 @@ fun VideoPlayerSurface(
         player.prepare()
         player.playWhenReady = true
         onPlaybackEvent("Preparing stream (${defaultHeaders.size} headers).")
+    }
+
+    LaunchedEffect(player) {
+        onControlsReady(
+            VideoPlayerControls(
+                seekByMs = { delta ->
+                    val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                    val newPosition = (player.currentPosition + delta)
+                        .coerceAtLeast(0L)
+                        .coerceAtMost(duration)
+                    player.seekTo(newPosition)
+                },
+                seekToMs = { position ->
+                    val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                    player.seekTo(position.coerceAtLeast(0L).coerceAtMost(duration))
+                },
+                togglePlayPause = {
+                    val shouldPlay = !player.isPlaying
+                    player.playWhenReady = shouldPlay
+                    shouldPlay
+                },
+            ),
+        )
+    }
+
+    LaunchedEffect(player, streamUrl) {
+        while (isActive) {
+            val duration = player.duration.takeIf { it > 0 } ?: 0L
+            val position = player.currentPosition.coerceAtLeast(0L)
+            onTimelineChanged(position, duration, player.isPlaying)
+            delay(250L)
+        }
     }
 
     DisposableEffect(player) {

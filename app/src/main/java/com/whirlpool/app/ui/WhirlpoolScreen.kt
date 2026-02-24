@@ -23,10 +23,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.whirlpool.app.player.VideoPlayerControls
 import com.whirlpool.app.player.VideoPlayerSurface
 import com.whirlpool.engine.VideoItem
 
@@ -56,6 +57,40 @@ private val CategoryGradients = listOf(
     listOf(Color(0xFFF59E0B), Color(0xFFF43F5E)),
     listOf(Color(0xFF8B5CF6), Color(0xFFEC4899)),
 )
+
+private data class MenuPalette(
+    val sheet: Color,
+    val section: Color,
+    val row: Color,
+    val divider: Color,
+    val primaryText: Color,
+    val secondaryText: Color,
+    val actionText: Color,
+)
+
+private fun menuPalette(darkModeEnabled: Boolean): MenuPalette {
+    return if (darkModeEnabled) {
+        MenuPalette(
+            sheet = Color(0xFF101012),
+            section = Color(0xFF1A1A1F),
+            row = Color(0xFF26262C),
+            divider = Color(0xFF34343C),
+            primaryText = Color(0xFFF3F4F7),
+            secondaryText = Color(0xFFB4B7C0),
+            actionText = Color(0xFF8AB4FF),
+        )
+    } else {
+        MenuPalette(
+            sheet = Color(0xFFF2F2F7),
+            section = Color.White,
+            row = Color.White,
+            divider = Color(0xFFE5E5EA),
+            primaryText = Color(0xFF111111),
+            secondaryText = Color(0xFF8E8E93),
+            actionText = Color(0xFF0A84FF),
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -163,10 +198,11 @@ fun WhirlpoolScreen(
             ModalBottomSheet(
                 onDismissRequest = { showFilters = false },
                 sheetState = sheetState,
-                containerColor = Color(0xFFF2F2F7),
+                containerColor = menuPalette(darkModeEnabled).sheet,
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             ) {
                 FiltersSheet(
+                    darkModeEnabled = darkModeEnabled,
                     serverHost = "getfigleaf.com",
                     channelName = state.activeChannel,
                     onClose = { showFilters = false },
@@ -181,7 +217,7 @@ fun WhirlpoolScreen(
             ModalBottomSheet(
                 onDismissRequest = { showSettings = false },
                 sheetState = sheetState,
-                containerColor = Color(0xFFF2F2F7),
+                containerColor = menuPalette(darkModeEnabled).sheet,
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             ) {
                 SettingsSheet(
@@ -431,6 +467,8 @@ private fun SettingsSheet(
     onClearLogs: () -> Unit,
     onClose: () -> Unit,
 ) {
+    val palette = menuPalette(darkModeEnabled)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -442,28 +480,40 @@ private fun SettingsSheet(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Close", color = Color(0xFF0A84FF), modifier = Modifier.clickable(onClick = onClose))
-            Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text("Close", color = palette.actionText, modifier = Modifier.clickable(onClick = onClose))
+            Text(
+                "Settings",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.primaryText,
+            )
             Spacer(modifier = Modifier.width(44.dp))
         }
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
+            colors = CardDefaults.cardColors(containerColor = palette.section),
             shape = RoundedCornerShape(12.dp),
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(8.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(palette.row)
                     .padding(horizontal = 14.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
-                    Text("Dark Mode", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Dark Mode",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.primaryText,
+                    )
                     Text(
                         "Use a dark color theme.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF8E8E93),
+                        color = palette.secondaryText,
                     )
                 }
                 Switch(
@@ -474,7 +524,7 @@ private fun SettingsSheet(
         }
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
+            colors = CardDefaults.cardColors(containerColor = palette.section),
             shape = RoundedCornerShape(12.dp),
         ) {
             Column(
@@ -485,13 +535,17 @@ private fun SettingsSheet(
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Debug Logs", style = MaterialTheme.typography.titleMedium)
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                    Text(
+                        "Debug Logs",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.primaryText,
+                    )
                     Text(
                         "Clear",
-                        color = Color(0xFF0A84FF),
+                        color = palette.actionText,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.clickable(onClick = onClearLogs),
                     )
@@ -500,6 +554,9 @@ private fun SettingsSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(220.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(palette.row)
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -507,14 +564,14 @@ private fun SettingsSheet(
                         Text(
                             text = "No logs yet.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF8E8E93),
+                            color = palette.secondaryText,
                         )
                     } else {
                         logs.reversed().forEach { entry ->
                             Text(
                                 text = entry,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF4B5563),
+                                color = palette.primaryText.copy(alpha = 0.9f),
                             )
                         }
                     }
@@ -527,12 +584,15 @@ private fun SettingsSheet(
 
 @Composable
 private fun FiltersSheet(
+    darkModeEnabled: Boolean,
     serverHost: String,
     channelName: String,
     onClose: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
 ) {
+    val palette = menuPalette(darkModeEnabled)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -544,12 +604,18 @@ private fun FiltersSheet(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Close", color = Color(0xFF0A84FF), modifier = Modifier.clickable(onClick = onClose))
-            Text("Filters", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text("Close", color = palette.actionText, modifier = Modifier.clickable(onClick = onClose))
+            Text(
+                "Filters",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.primaryText,
+            )
             Spacer(modifier = Modifier.width(44.dp))
         }
 
         FilterSection(
+            darkModeEnabled = darkModeEnabled,
             title = "NETWORK",
             rows = listOf(
                 "Server" to serverHost,
@@ -558,6 +624,7 @@ private fun FiltersSheet(
         )
 
         FilterSection(
+            darkModeEnabled = darkModeEnabled,
             title = "FILTERS",
             rows = listOf(
                 "Sort" to "Top Rated",
@@ -568,44 +635,60 @@ private fun FiltersSheet(
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ActionPill("Export", onExport)
-            ActionPill("Import", onImport)
+            ActionPill(darkModeEnabled = darkModeEnabled, label = "Export", onClick = onExport)
+            ActionPill(darkModeEnabled = darkModeEnabled, label = "Import", onClick = onImport)
         }
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun FilterSection(title: String, rows: List<Pair<String, String>>) {
+private fun FilterSection(darkModeEnabled: Boolean, title: String, rows: List<Pair<String, String>>) {
+    val palette = menuPalette(darkModeEnabled)
+
     Text(
         text = title,
-        color = Color(0xFF8E8E93),
+        color = palette.secondaryText,
         style = MaterialTheme.typography.labelLarge,
         modifier = Modifier.padding(horizontal = 4.dp),
     )
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = palette.section),
         shape = RoundedCornerShape(12.dp),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+        ) {
             rows.forEachIndexed { index, row ->
                 Row(
                     modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(palette.row)
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(row.first, style = MaterialTheme.typography.titleMedium)
-                    Text(row.second, color = Color(0xFF8E8E93), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        row.first,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.primaryText,
+                    )
+                    Text(
+                        row.second,
+                        color = palette.secondaryText,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                 }
                 if (index < rows.lastIndex) {
                     Spacer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(1.dp)
-                            .background(Color(0xFFE5E5EA)),
+                            .background(palette.divider),
                     )
                 }
             }
@@ -614,15 +697,17 @@ private fun FilterSection(title: String, rows: List<Pair<String, String>>) {
 }
 
 @Composable
-private fun ActionPill(label: String, onClick: () -> Unit) {
+private fun ActionPill(darkModeEnabled: Boolean, label: String, onClick: () -> Unit) {
+    val palette = menuPalette(darkModeEnabled)
+
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(Color.White)
+            .background(palette.row)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
-        Text(label, color = Color(0xFF0A84FF), fontWeight = FontWeight.SemiBold)
+        Text(label, color = palette.actionText, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -636,6 +721,19 @@ private fun PlayerMode(
     onClose: () -> Unit,
 ) {
     BackHandler(onBack = onClose)
+    var controls by remember { mutableStateOf<VideoPlayerControls?>(null) }
+    var durationMs by remember { mutableStateOf(0L) }
+    var positionMs by remember { mutableStateOf(0L) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubPositionMs by remember { mutableStateOf(0L) }
+
+    val displayedPositionMs = if (isScrubbing) scrubPositionMs else positionMs
+    val progress = if (durationMs > 0L) {
+        (displayedPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
 
     Box(
         modifier = Modifier
@@ -647,6 +745,17 @@ private fun PlayerMode(
             requestHeaders = requestHeaders,
             onPlaybackError = onPlaybackError,
             onPlaybackEvent = onPlaybackEvent,
+            onTimelineChanged = { position, duration, playing ->
+                positionMs = position
+                durationMs = duration
+                isPlaying = playing
+                if (!isScrubbing) {
+                    scrubPositionMs = position
+                }
+            },
+            onControlsReady = { readyControls ->
+                controls = readyControls
+            },
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -677,18 +786,38 @@ private fun PlayerMode(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("↺10", color = Color.White, style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "↺10",
+                color = Color.White,
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.clickable {
+                    controls?.seekByMs?.invoke(-10_000L)
+                },
+            )
             Box(
                 modifier = Modifier
                     .size(72.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.95f))
-                    .clickable { },
+                    .clickable {
+                        isPlaying = controls?.togglePlayPause?.invoke() ?: isPlaying
+                    },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("▶", color = Color.Black, style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    if (isPlaying) "⏸" else "▶",
+                    color = Color.Black,
+                    style = MaterialTheme.typography.headlineSmall,
+                )
             }
-            Text("10↻", color = Color.White, style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "10↻",
+                color = Color.White,
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.clickable {
+                    controls?.seekByMs?.invoke(10_000L)
+                },
+            )
         }
 
         Column(
@@ -697,21 +826,42 @@ private fun PlayerMode(
                 .fillMaxWidth()
                 .padding(16.dp),
         ) {
-            LinearProgressIndicator(
-                progress = 0.55f,
+            Slider(
+                value = progress,
+                onValueChange = { newProgress ->
+                    isScrubbing = true
+                    scrubPositionMs = (durationMs * newProgress).toLong()
+                },
+                onValueChangeFinished = {
+                    controls?.seekToMs?.invoke(scrubPositionMs)
+                    isScrubbing = false
+                },
+                enabled = durationMs > 0L,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp)),
-                color = Color.White,
-                trackColor = Color.White.copy(alpha = 0.3f),
+                    .height(20.dp),
             )
             Spacer(modifier = Modifier.height(6.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("00:02", color = Color.White)
-                Text("00:02", color = Color.White)
+                Text(formatPlayerTime(displayedPositionMs), color = Color.White)
+                Text(formatPlayerTime(durationMs), color = Color.White)
             }
         }
+    }
+}
+
+private fun formatPlayerTime(ms: Long): String {
+    if (ms <= 0L) {
+        return "00:00"
+    }
+    val totalSeconds = ms / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
     }
 }
 
