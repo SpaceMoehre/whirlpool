@@ -1,7 +1,10 @@
 package com.whirlpool.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -30,6 +34,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,19 +42,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.whirlpool.app.R
 import com.whirlpool.app.player.VideoPlayerControls
 import com.whirlpool.app.player.VideoPlayerSurface
 import com.whirlpool.engine.VideoItem
+import kotlinx.coroutines.delay
 
 private val CategoryGradients = listOf(
     listOf(Color(0xFF0A83E8), Color(0xFF32A9D4)),
@@ -406,7 +415,7 @@ private fun MainVideoCard(
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
@@ -414,19 +423,31 @@ private fun MainVideoCard(
             .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onPlay)
             .padding(10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        AsyncImage(
-            model = video.imageUrl,
-            contentDescription = video.title,
-            modifier = Modifier
-                .width(140.dp)
-                .height(84.dp)
-                .clip(RoundedCornerShape(10.dp)),
-            contentScale = ContentScale.Crop,
-        )
+        Box {
+            AsyncImage(
+                model = video.imageUrl,
+                contentDescription = video.title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(196.dp)
+                    .clip(RoundedCornerShape(10.dp)),
+                contentScale = ContentScale.Crop,
+            )
 
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = if (isFavorite) "♥" else "♡",
+                color = if (isFavorite) Color(0xFFFF3B30) else Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .clickable(onClick = onFavorite),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = video.title,
                 maxLines = 2,
@@ -441,21 +462,7 @@ private fun MainVideoCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF8E8E93),
             )
-            Text(
-                text = video.network ?: "",
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF8E8E93),
-            )
         }
-
-        Text(
-            text = if (isFavorite) "♥" else "♡",
-            color = if (isFavorite) Color(0xFFFF3B30) else Color(0xFF8E8E93),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.clickable(onClick = onFavorite),
-        )
     }
 }
 
@@ -727,12 +734,33 @@ private fun PlayerMode(
     var isPlaying by remember { mutableStateOf(false) }
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableStateOf(0L) }
+    var hudVisible by remember { mutableStateOf(true) }
+    var hudTimerToken by remember { mutableStateOf(0) }
+    val hiddenCenterTapInteraction = remember { MutableInteractionSource() }
+
+    val keepHudVisible = {
+        hudVisible = true
+        hudTimerToken += 1
+    }
+    val togglePlayback = {
+        keepHudVisible()
+        isPlaying = controls?.togglePlayPause?.invoke() ?: isPlaying
+    }
 
     val displayedPositionMs = if (isScrubbing) scrubPositionMs else positionMs
     val progress = if (durationMs > 0L) {
         (displayedPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
         0f
+    }
+    val hudAlpha by animateFloatAsState(
+        targetValue = if (hudVisible) 1f else 0f,
+        label = "hudAlpha",
+    )
+
+    androidx.compose.runtime.LaunchedEffect(hudTimerToken) {
+        delay(5_000L)
+        hudVisible = false
     }
 
     Box(
@@ -756,95 +784,138 @@ private fun PlayerMode(
             onControlsReady = { readyControls ->
                 controls = readyControls
             },
+            onSurfaceTap = keepHudVisible,
             modifier = Modifier.fillMaxSize(),
         )
 
-        Row(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("✕", color = Color.White, modifier = Modifier.clickable(onClick = onClose))
-            Text(
-                text = title,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp),
-            )
-            Text("♡", color = Color.White)
-        }
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { keepHudVisible() })
+                },
+        )
 
-        Row(
+        Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "↺10",
-                color = Color.White,
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.clickable {
-                    controls?.seekByMs?.invoke(-10_000L)
+                .size(120.dp)
+                .clickable(
+                    enabled = !hudVisible,
+                    interactionSource = hiddenCenterTapInteraction,
+                    indication = null,
+                ) {
+                    togglePlayback()
                 },
-            )
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.95f))
-                    .clickable {
-                        isPlaying = controls?.togglePlayPause?.invoke() ?: isPlaying
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (isPlaying) "⏸" else "▶",
-                    color = Color.Black,
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-            }
-            Text(
-                "10↻",
-                color = Color.White,
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.clickable {
-                    controls?.seekByMs?.invoke(10_000L)
-                },
-            )
-        }
+        )
 
-        Column(
+        Box(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(16.dp),
+                .fillMaxSize()
+                .alpha(hudAlpha),
         ) {
-            Slider(
-                value = progress,
-                onValueChange = { newProgress ->
-                    isScrubbing = true
-                    scrubPositionMs = (durationMs * newProgress).toLong()
-                },
-                onValueChangeFinished = {
-                    controls?.seekToMs?.invoke(scrubPositionMs)
-                    isScrubbing = false
-                },
-                enabled = durationMs > 0L,
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(20.dp),
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatPlayerTime(displayedPositionMs), color = Color.White)
-                Text(formatPlayerTime(durationMs), color = Color.White)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "✕",
+                    color = Color.White,
+                    modifier = Modifier.clickable(enabled = hudVisible) {
+                        keepHudVisible()
+                        onClose()
+                    },
+                )
+                Text(
+                    text = title,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                )
+                Text("♡", color = Color.White)
+            }
+
+            Row(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "↺10",
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.clickable {
+                        keepHudVisible()
+                        controls?.seekByMs?.invoke(-10_000L)
+                    },
+                )
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.95f))
+                        .clickable(enabled = hudVisible) { togglePlayback() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            id = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
+                        ),
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.Black,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
+                Text(
+                    "10↻",
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.clickable {
+                        keepHudVisible()
+                        controls?.seekByMs?.invoke(10_000L)
+                    },
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(16.dp),
+            ) {
+                Slider(
+                    value = progress,
+                    onValueChange = { newProgress ->
+                        keepHudVisible()
+                        isScrubbing = true
+                        scrubPositionMs = (durationMs * newProgress).toLong()
+                    },
+                    onValueChangeFinished = {
+                        keepHudVisible()
+                        controls?.seekToMs?.invoke(scrubPositionMs)
+                        isScrubbing = false
+                    },
+                    enabled = hudVisible && durationMs > 0L,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(20.dp),
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(formatPlayerTime(displayedPositionMs), color = Color.White)
+                    Text(formatPlayerTime(durationMs), color = Color.White)
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.whirlpool.app.player
 
 import android.net.Uri
+import android.view.MotionEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +39,7 @@ fun VideoPlayerSurface(
     onPlaybackEvent: (String) -> Unit,
     onTimelineChanged: (positionMs: Long, durationMs: Long, isPlaying: Boolean) -> Unit,
     onControlsReady: (VideoPlayerControls) -> Unit,
+    onSurfaceTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -160,10 +162,24 @@ fun VideoPlayerSurface(
                 useController = false
                 controllerAutoShow = false
                 this.player = player
+                setOnClickListener { onSurfaceTap() }
+                setOnTouchListener { _, event ->
+                    if (event.action == MotionEvent.ACTION_UP) {
+                        onSurfaceTap()
+                    }
+                    false
+                }
             }
         },
         update = { playerView ->
             playerView.player = player
+            playerView.setOnClickListener { onSurfaceTap() }
+            playerView.setOnTouchListener { _, event ->
+                if (event.action == MotionEvent.ACTION_UP) {
+                    onSurfaceTap()
+                }
+                false
+            }
         },
     )
 }

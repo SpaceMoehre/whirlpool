@@ -13,6 +13,58 @@
   <img alt="SQLite" src="https://img.shields.io/badge/Data-SQLite-003B57?style=for-the-badge&logo=sqlite">
 </p>
 
+## Installation
+
+If you already have an APK build artifact, install it directly:
+
+```bash
+adb install -r app-debug.apk
+adb shell am start -n com.whirlpool.app/.MainActivity
+```
+
+## Build from source
+
+### 1. Prerequisites
+
+- Rust toolchain (1.75+)
+- Android SDK + NDK
+- `cargo-ndk`
+- Android Studio / Gradle environment
+- Optional runtime support: Python + `curl-cffi`
+
+### 2. Generate UniFFI Kotlin Bindings
+
+```bash
+scripts/generate_uniffi_kotlin.sh
+```
+
+Generates Kotlin bridge sources into:
+
+- `app/src/main/java/com/whirlpool/engine/`
+
+### 3. Build Android Native Libraries
+
+```bash
+scripts/build_android_libs.sh
+```
+
+Builds `.so` files for:
+
+- `arm64-v8a`
+- `x86_64`
+
+and outputs into:
+
+- `app/src/main/jniLibs/`
+
+### 4. Build and install the app
+
+```bash
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.whirlpool.app/.MainActivity
+```
+
 ## What This Project Is
 
 Whirlpool is a native Android app with:
@@ -104,49 +156,6 @@ Whirlpool video discovery follows this sequence:
    - `page`
    - `perPage`
 4. Treat each element in `items[]` (or `videos[]`) as one video record
-
-## Quick Start
-
-### 1. Prerequisites
-
-- Rust toolchain (1.75+)
-- Android SDK + NDK
-- `cargo-ndk`
-- Android Studio / Gradle environment
-- Optional runtime support: Python + `curl-cffi`
-
-### 2. Generate UniFFI Kotlin Bindings
-
-```bash
-scripts/generate_uniffi_kotlin.sh
-```
-
-Generates Kotlin bridge sources into:
-
-- `app/src/main/java/com/whirlpool/engine/`
-
-### 3. Build Android Native Libraries
-
-```bash
-scripts/build_android_libs.sh
-```
-
-Builds `.so` files for:
-
-- `arm64-v8a`
-- `x86_64`
-
-and outputs into:
-
-- `app/src/main/jniLibs/`
-
-### 4. Build and Install the App
-
-```bash
-./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.whirlpool.app/.MainActivity
-```
 
 ## Testing and Runtime Diagnostics
 
