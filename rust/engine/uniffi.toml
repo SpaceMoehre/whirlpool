@@ -1,0 +1,6 @@
+[bindings.kotlin]
+package_name = "com.whirlpool.engine"
+cdylib_name = "whirlpool_engine"
+android = true
+kotlin_target_version = "1.9"
+generate_immutable_records = true

@@ -1,0 +1,34 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+
+# Local project config
+local.properties
+
+# Build outputs (Android/Gradle/Kotlin)
+.gradle/
+.kotlin/
+**/build/
+.cxx/
+.externalNativeBuild/
+captures/
+
+# Rust build outputs
+/target/
+
+# Generated UniFFI / native artifacts
+app/src/main/java/com/whirlpool/engine/*.kt
+app/src/main/jniLibs/**/libwhirlpool_engine.so
+
+# Temp, logs, diagnostics
+.tmp/
+*.log
+*.hprof
+
+# Python caches (scripts)
+__pycache__/
+*.pyc
+Prompt.md
