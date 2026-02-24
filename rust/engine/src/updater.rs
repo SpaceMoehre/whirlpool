@@ -3,7 +3,7 @@ use chrono::Utc;
 use crate::errors::EngineError;
 use crate::models::{GitHubRelease, YtDlpUpdateInfo};
 
-const DEFAULT_RELEASES_API: &str = "https://api.github.com/repos/hottubapp/yt-dlp/releases/latest";
+const DEFAULT_RELEASES_API: &str = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
 const GH_USER_AGENT: &str = "whirlpool-engine/0.1 (+android; uniffi)";
 
 pub fn default_release_api() -> &'static str {

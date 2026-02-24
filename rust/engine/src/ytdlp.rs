@@ -6,23 +6,19 @@ use crate::models::{ResolvedVideo, YtDlpResponse};
 #[derive(Debug, Clone)]
 pub struct YtDlpClient {
     binary_path: String,
+    python_executable: String,
 }
 
 impl YtDlpClient {
-    pub fn new(binary_path: String) -> Self {
-        Self { binary_path }
+    pub fn new(binary_path: String, python_executable: String) -> Self {
+        Self {
+            binary_path,
+            python_executable,
+        }
     }
 
     pub fn extract_stream(&self, page_url: &str) -> Result<ResolvedVideo, EngineError> {
-        let output = Command::new(&self.binary_path)
-            .arg("-J")
-            .arg("--no-playlist")
-            .arg("--no-warnings")
-            .arg(page_url)
-            .output()
-            .map_err(|err| EngineError::Process {
-                detail: format!("failed to execute yt-dlp: {err}"),
-            })?;
+        let output = self.run_ytdlp(&["-J", "--no-playlist", "--no-warnings", page_url])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -70,12 +66,7 @@ impl YtDlpClient {
     }
 
     pub fn current_version(&self) -> Result<String, EngineError> {
-        let output = Command::new(&self.binary_path)
-            .arg("--version")
-            .output()
-            .map_err(|err| EngineError::Process {
-                detail: format!("failed to execute yt-dlp --version: {err}"),
-            })?;
+        let output = self.run_ytdlp(&["--version"])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -92,12 +83,7 @@ impl YtDlpClient {
     }
 
     pub fn update_binary(&self) -> Result<String, EngineError> {
-        let output = Command::new(&self.binary_path)
-            .arg("-U")
-            .output()
-            .map_err(|err| EngineError::Process {
-                detail: format!("failed to run yt-dlp update: {err}"),
-            })?;
+        let output = self.run_ytdlp(&["-U"])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -110,4 +96,45 @@ impl YtDlpClient {
             detail: format!("invalid yt-dlp update output: {err}"),
         })
     }
+
+    fn run_ytdlp(&self, args: &[&str]) -> Result<std::process::Output, EngineError> {
+        match Command::new(&self.binary_path).args(args).output() {
+            Ok(output) => Ok(output),
+            Err(direct_err) => self.run_with_python(args).map_err(|python_err| {
+                EngineError::Process {
+                    detail: format!(
+                        "failed to execute yt-dlp directly: {direct_err}; python fallback failed: {python_err}"
+                    ),
+                }
+            }),
+        }
+    }
+
+    fn run_with_python(&self, args: &[&str]) -> Result<std::process::Output, EngineError> {
+        let module_output = Command::new(&self.python_executable)
+            .arg("-m")
+            .arg("yt_dlp")
+            .args(args)
+            .output()
+            .map_err(|err| EngineError::Process {
+                detail: format!("failed to execute yt-dlp via python module: {err}"),
+            })?;
+
+        if module_output.status.success() || !module_missing(&module_output.stderr) {
+            return Ok(module_output);
+        }
+
+        Command::new(&self.python_executable)
+            .arg(&self.binary_path)
+            .args(args)
+            .output()
+            .map_err(|err| EngineError::Process {
+                detail: format!("failed to execute yt-dlp via python script: {err}"),
+            })
+    }
+}
+
+fn module_missing(stderr: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    text.contains("no module named") && text.contains("yt_dlp")
 }

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::process::Command;
 
 use crate::errors::EngineError;
@@ -6,22 +5,17 @@ use crate::errors::EngineError;
 pub fn fetch_with_curl_cffi(
     python_executable: &str,
     script_path: &str,
+    method: &str,
     url: &str,
-    query: &[(&str, String)],
+    json_body: Option<&str>,
 ) -> Result<String, EngineError> {
-    let mut payload = HashMap::new();
-    for (key, value) in query {
-        payload.insert((*key).to_string(), value.clone());
-    }
-
-    let query_json = serde_json::to_string(&payload).map_err(|err| EngineError::Serialization {
-        detail: format!("failed to encode curl-cffi query payload: {err}"),
-    })?;
+    let payload = json_body.unwrap_or("{}");
 
     let output = Command::new(python_executable)
         .arg(script_path)
+        .arg(method)
         .arg(url)
-        .arg(query_json)
+        .arg(payload)
         .output()
         .map_err(|err| EngineError::Process {
             detail: format!("failed to execute curl-cffi bridge: {err}"),

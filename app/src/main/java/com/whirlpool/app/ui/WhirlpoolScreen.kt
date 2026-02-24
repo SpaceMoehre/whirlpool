@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,6 +27,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -41,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.whirlpool.app.player.VideoPlayerSurface
@@ -55,14 +59,22 @@ private val CategoryGradients = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WhirlpoolScreen(viewModel: WhirlpoolViewModel) {
+fun WhirlpoolScreen(
+    viewModel: WhirlpoolViewModel,
+    darkModeEnabled: Boolean,
+    onDarkModeToggle: (Boolean) -> Unit,
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showFilters by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
 
     if (state.streamUrl != null) {
         PlayerMode(
             title = state.selectedVideo?.title ?: "Now Playing",
             streamUrl = state.streamUrl,
+            requestHeaders = state.streamHeaders,
+            onPlaybackError = viewModel::onPlayerError,
+            onPlaybackEvent = viewModel::onPlayerEvent,
             onClose = viewModel::dismissPlayer,
         )
         return
@@ -71,14 +83,17 @@ fun WhirlpoolScreen(viewModel: WhirlpoolViewModel) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF6F5FA)),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
-                HeaderRow(onFilters = { showFilters = true })
+                HeaderRow(
+                    onSettings = { showSettings = true },
+                    onFilters = { showFilters = true },
+                )
             }
 
             item {
@@ -90,43 +105,32 @@ fun WhirlpoolScreen(viewModel: WhirlpoolViewModel) {
             }
 
             item {
-                PromoBanner()
+                SectionTitle("Categories")
+                CategoriesRow(state.categories)
             }
 
             item {
-                SectionTitle("Categories", "See More")
-                CategoriesRow(state.videos)
+                SectionTitle("Favorites")
+                if (state.favorites.isNotEmpty()) {
+                    VideosRow(
+                        videos = state.favorites,
+                        onPlay = viewModel::playVideo,
+                        onFavoriteToggle = viewModel::toggleFavorite,
+                        favorites = state.favorites,
+                    )
+                } else {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
             }
 
             item {
-                SectionTitle("Favorites", "See More")
-                VideosRow(
-                    videos = state.favorites.ifEmpty { state.videos.take(3) },
-                    onPlay = viewModel::playVideo,
-                    onFavoriteToggle = viewModel::toggleFavorite,
-                    favorites = state.favorites,
-                    largeCard = true,
-                )
-            }
-
-            item {
-                SectionTitle("Recents", "See More")
-                VideosRow(
-                    videos = state.videos,
-                    onPlay = viewModel::playVideo,
-                    onFavoriteToggle = viewModel::toggleFavorite,
-                    favorites = state.favorites,
-                    largeCard = false,
-                )
-            }
-
-            item {
+                SectionTitle("Videos")
                 state.errorText?.let {
                     Text(
                         text = it,
                         color = Color(0xFFC2412D),
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
                 state.actionText?.let {
@@ -134,10 +138,23 @@ fun WhirlpoolScreen(viewModel: WhirlpoolViewModel) {
                         text = it,
                         color = Color(0xFF2563EB),
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            items(state.videos, key = { it.id }) { video ->
+                val isFavorite = state.favorites.any { it.id == video.id }
+                MainVideoCard(
+                    video = video,
+                    isFavorite = isFavorite,
+                    onPlay = { viewModel.playVideo(video) },
+                    onFavorite = { viewModel.toggleFavorite(video) },
+                )
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
 
@@ -150,9 +167,29 @@ fun WhirlpoolScreen(viewModel: WhirlpoolViewModel) {
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             ) {
                 FiltersSheet(
+                    serverHost = "getfigleaf.com",
+                    channelName = state.activeChannel,
                     onClose = { showFilters = false },
                     onExport = viewModel::exportDatabase,
                     onImport = viewModel::importDatabase,
+                )
+            }
+        }
+
+        if (showSettings) {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showSettings = false },
+                sheetState = sheetState,
+                containerColor = Color(0xFFF2F2F7),
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            ) {
+                SettingsSheet(
+                    darkModeEnabled = darkModeEnabled,
+                    onDarkModeToggle = onDarkModeToggle,
+                    logs = state.logs,
+                    onClearLogs = viewModel::clearLogs,
+                    onClose = { showSettings = false },
                 )
             }
         }
@@ -160,40 +197,34 @@ fun WhirlpoolScreen(viewModel: WhirlpoolViewModel) {
 }
 
 @Composable
-private fun HeaderRow(onFilters: () -> Unit) {
-    Row(
+private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text("⚙", style = MaterialTheme.typography.titleMedium)
         Text(
-            text = "Hot Tub",
+            text = "⚙",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .clickable(onClick = onSettings),
+        )
+
+        Text(
+            text = "Whirlpool",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.Center),
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(
-                        brush = Brush.horizontalGradient(
-                            listOf(Color(0xFF7C8FFF), Color(0xFF9064F8)),
-                        ),
-                    )
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            ) {
-                Text("✨ Get Pro", color = Color.White, style = MaterialTheme.typography.labelLarge)
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "◍",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.clickable(onClick = onFilters),
-            )
-        }
+
+        Text(
+            text = "◍",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .clickable(onClick = onFilters),
+        )
     }
 }
 
@@ -226,42 +257,7 @@ private fun SearchBar(
 }
 
 @Composable
-private fun PromoBanner() {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(Color(0xFFB34DFF), Color(0xFFFF8A1D)),
-                    ),
-                )
-                .padding(16.dp),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Try Hot Tub Pro for free!",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Get access to all features and benefits of Hot Tub Pro",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.85f),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionTitle(title: String, action: String) {
+private fun SectionTitle(title: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -270,25 +266,23 @@ private fun SectionTitle(title: String, action: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-        Text(action, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF8E8E93))
     }
 }
 
 @Composable
-private fun CategoriesRow(videos: List<VideoItem>) {
-    val categories = videos.map { it.title.split(' ').take(2).joinToString(" ") }.distinct().take(8)
+private fun CategoriesRow(categories: List<String>) {
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { Spacer(modifier = Modifier.width(6.dp)) }
-        items(categories.ifEmpty { listOf("Funny Cats", "Kittens", "Cat Fails") }) { title ->
+        items(categories) { title ->
             val gradient = CategoryGradients[title.hashCode().absoluteValue % CategoryGradients.size]
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
                     .background(Brush.horizontalGradient(gradient))
-                    .padding(horizontal = 24.dp, vertical = 24.dp),
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
             ) {
                 Text(
                     text = title,
@@ -308,7 +302,6 @@ private fun VideosRow(
     onPlay: (VideoItem) -> Unit,
     onFavoriteToggle: (VideoItem) -> Unit,
     favorites: List<VideoItem>,
-    largeCard: Boolean,
 ) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Spacer(modifier = Modifier.width(6.dp)) }
@@ -317,7 +310,6 @@ private fun VideosRow(
             VideoCard(
                 video = video,
                 isFavorite = isFavorite,
-                largeCard = largeCard,
                 onPlay = { onPlay(video) },
                 onFavorite = { onFavoriteToggle(video) },
             )
@@ -330,16 +322,12 @@ private fun VideosRow(
 private fun VideoCard(
     video: VideoItem,
     isFavorite: Boolean,
-    largeCard: Boolean,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
 ) {
-    val width = if (largeCard) 260.dp else 200.dp
-    val thumbHeight = if (largeCard) 146.dp else 112.dp
-
     Column(
         modifier = Modifier
-            .width(width)
+            .width(220.dp)
             .clickable(onClick = onPlay),
     ) {
         Box {
@@ -348,20 +336,9 @@ private fun VideoCard(
                 contentDescription = video.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(thumbHeight)
+                    .height(124.dp)
                     .clip(RoundedCornerShape(10.dp)),
                 contentScale = ContentScale.Crop,
-            )
-
-            Text(
-                text = "WATCHED",
-                color = Color.White,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .padding(8.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
             )
 
             Text(
@@ -373,18 +350,6 @@ private fun VideoCard(
                     .padding(8.dp)
                     .clickable(onClick = onFavorite),
             )
-
-            Text(
-                text = formatDuration(video.durationSeconds),
-                color = Color.White,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(8.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
         }
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -395,18 +360,175 @@ private fun VideoCard(
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+@Composable
+private fun MainVideoCard(
+    video: VideoItem,
+    isFavorite: Boolean,
+    onPlay: () -> Unit,
+    onFavorite: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onPlay)
+            .padding(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AsyncImage(
+            model = video.imageUrl,
+            contentDescription = video.title,
+            modifier = Modifier
+                .width(140.dp)
+                .height(84.dp)
+                .clip(RoundedCornerShape(10.dp)),
+            contentScale = ContentScale.Crop,
+        )
+
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = video.title,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "${video.authorName ?: "Unknown"}  ·  ${video.viewCount ?: 0u} views",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF8E8E93),
+            )
+            Text(
+                text = video.network ?: "",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF8E8E93),
+            )
+        }
+
         Text(
-            text = "${video.authorName ?: "Community"}  ·  ${video.viewCount?.toString() ?: "--"} views",
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF8E8E93),
+            text = if (isFavorite) "♥" else "♡",
+            color = if (isFavorite) Color(0xFFFF3B30) else Color(0xFF8E8E93),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.clickable(onClick = onFavorite),
         )
     }
 }
 
 @Composable
+private fun SettingsSheet(
+    darkModeEnabled: Boolean,
+    onDarkModeToggle: (Boolean) -> Unit,
+    logs: List<String>,
+    onClearLogs: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Close", color = Color(0xFF0A84FF), modifier = Modifier.clickable(onClick = onClose))
+            Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.width(44.dp))
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text("Dark Mode", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Use a dark color theme.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF8E8E93),
+                    )
+                }
+                Switch(
+                    checked = darkModeEnabled,
+                    onCheckedChange = onDarkModeToggle,
+                )
+            }
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Debug Logs", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Clear",
+                        color = Color(0xFF0A84FF),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.clickable(onClick = onClearLogs),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (logs.isEmpty()) {
+                        Text(
+                            text = "No logs yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF8E8E93),
+                        )
+                    } else {
+                        logs.reversed().forEach { entry ->
+                            Text(
+                                text = entry,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF4B5563),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+@Composable
 private fun FiltersSheet(
+    serverHost: String,
+    channelName: String,
     onClose: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -430,8 +552,8 @@ private fun FiltersSheet(
         FilterSection(
             title = "NETWORK",
             rows = listOf(
-                "Server" to "getfigleaf.com",
-                "Channel" to "Community",
+                "Server" to serverHost,
+                "Channel" to channelName,
             ),
         )
 
@@ -508,8 +630,13 @@ private fun ActionPill(label: String, onClick: () -> Unit) {
 private fun PlayerMode(
     title: String,
     streamUrl: String?,
+    requestHeaders: Map<String, String>,
+    onPlaybackError: (String) -> Unit,
+    onPlaybackEvent: (String) -> Unit,
     onClose: () -> Unit,
 ) {
+    BackHandler(onBack = onClose)
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -517,6 +644,9 @@ private fun PlayerMode(
     ) {
         VideoPlayerSurface(
             streamUrl = streamUrl,
+            requestHeaders = requestHeaders,
+            onPlaybackError = onPlaybackError,
+            onPlaybackEvent = onPlaybackEvent,
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -533,7 +663,9 @@ private fun PlayerMode(
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
             )
             Text("♡", color = Color.White)
         }
@@ -581,13 +713,6 @@ private fun PlayerMode(
             }
         }
     }
-}
-
-private fun formatDuration(durationSeconds: UInt?): String {
-    val total = durationSeconds?.toInt() ?: return "--:--"
-    val minutes = total / 60
-    val seconds = total % 60
-    return "%d:%02d".format(minutes, seconds)
 }
 
 private val Int.absoluteValue: Int

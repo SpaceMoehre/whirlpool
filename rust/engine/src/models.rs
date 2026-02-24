@@ -73,14 +73,23 @@ pub struct BridgeHealth {
 
 #[derive(Debug, Deserialize)]
 pub struct ApiStatusResponse {
+    pub id: Option<String>,
     pub name: Option<String>,
+    pub subtitle: Option<String>,
+    pub description: Option<String>,
+    #[serde(rename = "iconUrl")]
+    pub icon_url: Option<String>,
+    pub color: Option<String>,
+    pub status: Option<String>,
+    pub message: Option<String>,
+    pub categories: Option<Vec<String>>,
     #[serde(rename = "apiVersion")]
     pub api_version: Option<String>,
     #[serde(rename = "primaryColor")]
     pub primary_color: Option<String>,
     #[serde(rename = "secondaryColor")]
     pub secondary_color: Option<String>,
-    pub channels: Option<Vec<String>>,
+    pub channels: Option<Vec<ApiStatusChannel>>,
     pub sources: Option<Vec<String>>,
     #[serde(rename = "adblockRequired")]
     pub adblock_required: Option<bool>,
@@ -90,19 +99,60 @@ pub struct ApiStatusResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct ApiVideoEnvelope {
+    #[serde(default)]
     pub videos: Vec<ApiVideoRecord>,
+    #[serde(default)]
+    pub items: Vec<ApiVideoRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiStatusChannel {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub favicon: Option<String>,
+    pub color: Option<String>,
+    pub status: Option<String>,
+    #[serde(default)]
+    pub default: bool,
+    #[serde(default)]
+    pub options: Vec<ApiStatusChannelOption>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(rename = "ytdlpCommand")]
+    pub ytdlp_command: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiStatusChannelOption {
+    pub id: String,
+    pub title: Option<String>,
+    #[serde(default)]
+    pub options: Vec<ApiStatusChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiStatusChoice {
+    pub id: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ApiVideoRecord {
     pub id: Option<String>,
+    #[serde(rename = "hashedUrl")]
+    pub hashed_url: Option<String>,
     pub title: Option<String>,
     pub url: Option<String>,
     pub duration: Option<u32>,
+    #[serde(alias = "thumb")]
     pub image: Option<String>,
+    #[serde(alias = "channel")]
     pub network: Option<String>,
+    #[serde(alias = "uploader")]
     pub author_name: Option<String>,
     pub extractor: Option<String>,
+    #[serde(alias = "views")]
     pub view_count: Option<u64>,
 }
 

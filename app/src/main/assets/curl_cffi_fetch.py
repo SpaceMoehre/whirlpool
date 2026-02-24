@@ -2,13 +2,25 @@
 import json
 import sys
 
-if len(sys.argv) != 3:
-    raise SystemExit("expected args: <url> <query_json>")
+if len(sys.argv) != 4:
+    raise SystemExit("expected args: <method> <url> <payload_json>")
 
 from curl_cffi import requests
 
-url = sys.argv[1]
-params = json.loads(sys.argv[2])
-response = requests.get(url, params=params, impersonate="chrome124", timeout=20)
+method = sys.argv[1].upper()
+url = sys.argv[2]
+payload = json.loads(sys.argv[3])
+
+kwargs = {
+    "url": url,
+    "impersonate": "chrome124",
+    "timeout": 20,
+}
+if method == "GET":
+    kwargs["params"] = payload
+else:
+    kwargs["json"] = payload
+
+response = requests.request(method, **kwargs)
 response.raise_for_status()
 print(response.text)

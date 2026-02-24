@@ -23,7 +23,8 @@ Whirlpool is a native Android app with:
 
 The app uses:
 
-- `/api/status` and `/api/videos` (`/api/video` fallback) for discovery.
+- `POST /api/status` to load server metadata and channel definitions.
+- `POST /api/videos` (`/api/video` fallback) using the selected/default channel from status.
 - `yt-dlp` extraction for stream resolution.
 - `curl-cffi` bridge support for anti-bot browser impersonation workflows.
 - Rust-owned SQLite as the single source of truth.
@@ -89,6 +90,20 @@ Main bridged data objects:
 - `FavoriteItem`
 - `YtDlpUpdateInfo`
 - `BridgeHealth`
+
+## Discovery Flow
+
+Whirlpool video discovery follows this sequence:
+
+1. `POST /api/status`
+2. Read `channels[]` from response and pick the default/active channel
+3. `POST /api/videos` with JSON payload:
+   - `channel`
+   - `sort`
+   - `query`
+   - `page`
+   - `perPage`
+4. Treat each element in `items[]` (or `videos[]`) as one video record
 
 ## Quick Start
 

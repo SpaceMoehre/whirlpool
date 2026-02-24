@@ -2,7 +2,7 @@
 """Fetch a URL with curl-cffi impersonation.
 
 Usage:
-  python curl_cffi_fetch.py <url> <query_json>
+  python curl_cffi_fetch.py <method> <url> <payload_json>
 """
 
 import json
@@ -10,12 +10,13 @@ import sys
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("expected arguments: <url> <query_json>", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("expected arguments: <method> <url> <payload_json>", file=sys.stderr)
         return 2
 
-    url = sys.argv[1]
-    query_payload = json.loads(sys.argv[2])
+    method = sys.argv[1].upper()
+    url = sys.argv[2]
+    payload = json.loads(sys.argv[3])
 
     try:
         from curl_cffi import requests
@@ -24,12 +25,17 @@ def main() -> int:
         return 3
 
     try:
-        response = requests.get(
-            url,
-            params=query_payload,
-            impersonate="chrome124",
-            timeout=20,
-        )
+        kwargs = {
+            "url": url,
+            "impersonate": "chrome124",
+            "timeout": 20,
+        }
+        if method == "GET":
+            kwargs["params"] = payload
+        else:
+            kwargs["json"] = payload
+
+        response = requests.request(method, **kwargs)
         response.raise_for_status()
     except Exception as exc:  # pragma: no cover
         print(f"curl_cffi request failed: {exc}", file=sys.stderr)

@@ -15,7 +15,7 @@
 - `api.rs`: `/api/status` + `/api/videos` discovery (`/api/video` fallback).
 - `curl_cffi.rs`: Python bridge invocation for curl-cffi browser impersonation.
 - `ytdlp.rs`: yt-dlp extraction (`-J`) and update command (`-U`) support.
-- `updater.rs`: boot-time GitHub release checks for `hottubapp/yt-dlp`.
+- `updater.rs`: boot-time GitHub release checks for official `yt-dlp/yt-dlp`.
 - `db.rs`: shared SQLite schema for cache, favorites, engine metadata, plus import/export.
 - `lib.rs`: UniFFI object export and public bridge methods.
 

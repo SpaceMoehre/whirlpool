@@ -39,7 +39,7 @@ impl Engine {
 
         let engine = Arc::new(Self {
             api: ApiClient::new(&config),
-            yt_dlp: YtDlpClient::new(config.yt_dlp_path.clone()),
+            yt_dlp: YtDlpClient::new(config.yt_dlp_path.clone(), config.python_executable.clone()),
             db,
             config,
         });
