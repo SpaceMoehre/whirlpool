@@ -824,7 +824,7 @@ private fun PlayerMode(
                 Text(
                     "✕",
                     color = Color.White,
-                    modifier = Modifier.clickable(enabled = hudVisible) {
+                    modifier = Modifier.clickable {
                         keepHudVisible()
                         onClose()
                     },
@@ -862,7 +862,7 @@ private fun PlayerMode(
                         .size(72.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.95f))
-                        .clickable(enabled = hudVisible) { togglePlayback() },
+                        .clickable { togglePlayback() },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -903,7 +903,7 @@ private fun PlayerMode(
                         controls?.seekToMs?.invoke(scrubPositionMs)
                         isScrubbing = false
                     },
-                    enabled = hudVisible && durationMs > 0L,
+                    enabled = durationMs > 0L,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(20.dp),
