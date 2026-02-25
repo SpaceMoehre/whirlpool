@@ -13,6 +13,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +44,7 @@ class WhirlpoolViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(WhirlpoolUiState())
     val uiState: StateFlow<WhirlpoolUiState> = mutableState.asStateFlow()
+    private var querySearchDebounceJob: Job? = null
 
     init {
         log("App initialized.")
@@ -50,6 +53,7 @@ class WhirlpoolViewModel(
 
     fun onQueryChange(query: String) {
         mutableState.value = mutableState.value.copy(query = query)
+        scheduleDebouncedSearch(query)
     }
 
     fun refreshAll() {
@@ -109,6 +113,7 @@ class WhirlpoolViewModel(
     }
 
     fun search() {
+        cancelDebouncedSearch()
         refreshAll()
     }
 
@@ -299,6 +304,22 @@ class WhirlpoolViewModel(
         mutableState.value = mutableState.value.copy(logs = updated)
     }
 
+    private fun scheduleDebouncedSearch(expectedQuery: String) {
+        cancelDebouncedSearch()
+        querySearchDebounceJob = viewModelScope.launch {
+            delay(1_000)
+            val currentQuery = mutableState.value.query
+            if (currentQuery == expectedQuery) {
+                refreshAll()
+            }
+        }
+    }
+
+    private fun cancelDebouncedSearch() {
+        querySearchDebounceJob?.cancel()
+        querySearchDebounceJob = null
+    }
+
     private fun normalizeChannels(status: com.whirlpool.engine.StatusSummary): List<StatusChannel> {
         if (status.channelDetails.isNotEmpty()) {
             return status.channelDetails
@@ -352,5 +373,10 @@ class WhirlpoolViewModel(
                 }
             }
         }
+    }
+
+    override fun onCleared() {
+        cancelDebouncedSearch()
+        super.onCleared()
     }
 }
