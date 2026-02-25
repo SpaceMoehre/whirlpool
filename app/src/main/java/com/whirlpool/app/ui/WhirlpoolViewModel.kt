@@ -56,10 +56,20 @@ class WhirlpoolViewModel(
         scheduleDebouncedSearch(query)
     }
 
-    fun refreshAll() {
+    fun refreshAll(showLoading: Boolean = true) {
         val current = mutableState.value
-        mutableState.value = current.copy(isLoading = true, errorText = null)
-        log("Refreshing feed from server.")
+        mutableState.value = if (showLoading) {
+            current.copy(isLoading = true, errorText = null)
+        } else {
+            current.copy(errorText = null)
+        }
+        log(
+            if (showLoading) {
+                "Refreshing feed from server."
+            } else {
+                "Refreshing videos in background."
+            },
+        )
 
         viewModelScope.launch {
             runCatching {
@@ -114,7 +124,7 @@ class WhirlpoolViewModel(
 
     fun search() {
         cancelDebouncedSearch()
-        refreshAll()
+        refreshAll(showLoading = true)
     }
 
     fun onChannelSelected(channelId: String) {
@@ -125,7 +135,7 @@ class WhirlpoolViewModel(
             activeChannel = channelId,
             selectedFilters = normalizedFilters,
         )
-        search()
+        refreshVideosInBackground()
     }
 
     fun onFilterSelected(optionId: String, choiceId: String) {
@@ -146,7 +156,7 @@ class WhirlpoolViewModel(
         mutableState.value = current.copy(
             selectedFilters = current.selectedFilters + (optionId to choiceId),
         )
-        search()
+        refreshVideosInBackground()
     }
 
     fun playVideo(video: VideoItem) {
@@ -310,7 +320,7 @@ class WhirlpoolViewModel(
             delay(1_000)
             val currentQuery = mutableState.value.query
             if (currentQuery == expectedQuery) {
-                refreshAll()
+                refreshAll(showLoading = true)
             }
         }
     }
@@ -318,6 +328,11 @@ class WhirlpoolViewModel(
     private fun cancelDebouncedSearch() {
         querySearchDebounceJob?.cancel()
         querySearchDebounceJob = null
+    }
+
+    private fun refreshVideosInBackground() {
+        cancelDebouncedSearch()
+        refreshAll(showLoading = false)
     }
 
     private fun normalizeChannels(status: com.whirlpool.engine.StatusSummary): List<StatusChannel> {

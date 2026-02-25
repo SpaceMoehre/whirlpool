@@ -36,6 +36,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -151,82 +152,88 @@ fun WhirlpoolScreen(
         color = MaterialTheme.colorScheme.background,
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            LazyColumn(
+            PullToRefreshBox(
+                isRefreshing = state.isLoading,
+                onRefresh = viewModel::search,
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item {
-                    HeaderRow(
-                        onSettings = { showSettings = true },
-                        onFilters = { showFilters = true },
-                    )
-                }
-
-                item {
-                    SearchBar(
-                        query = state.query,
-                        onQueryChange = viewModel::onQueryChange,
-                        onSearch = viewModel::search,
-                    )
-                }
-
-                item {
-                    SectionTitle("Categories")
-                    CategoriesRow(
-                        categories = state.categories,
-                        onCategoryClick = { category ->
-                            viewModel.onQueryChange(category)
-                            viewModel.search()
-                        },
-                    )
-                }
-
-                item {
-                    SectionTitle("Favorites")
-                    if (state.favorites.isNotEmpty()) {
-                        VideosRow(
-                            videos = state.favorites,
-                            onPlay = viewModel::playVideo,
-                            onFavoriteToggle = viewModel::toggleFavorite,
-                            favorites = state.favorites,
-                        )
-                    } else {
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                }
-
-                item {
-                    SectionTitle("Videos")
-                    state.errorText?.let {
-                        Text(
-                            text = it,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    item {
+                        HeaderRow(
+                            onSettings = { showSettings = true },
+                            onFilters = { showFilters = true },
                         )
                     }
-                    state.actionText?.let {
-                        Text(
-                            text = it,
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+
+                    item {
+                        SearchBar(
+                            query = state.query,
+                            onQueryChange = viewModel::onQueryChange,
+                            onSearch = viewModel::search,
                         )
                     }
-                }
 
-                items(state.videos, key = { it.id }) { video ->
-                    val isFavorite = state.favorites.any { it.id == video.id }
-                    MainVideoCard(
-                        video = video,
-                        isFavorite = isFavorite,
-                        onPlay = { viewModel.playVideo(video) },
-                        onFavorite = { viewModel.toggleFavorite(video) },
-                    )
-                }
+                    item {
+                        SectionTitle("Categories")
+                        CategoriesRow(
+                            categories = state.categories,
+                            onCategoryClick = { category ->
+                                viewModel.onQueryChange(category)
+                                viewModel.search()
+                            },
+                        )
+                    }
 
-                item {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    item {
+                        SectionTitle("Favorites")
+                        if (state.favorites.isNotEmpty()) {
+                            VideosRow(
+                                videos = state.favorites,
+                                onPlay = viewModel::playVideo,
+                                onFavoriteToggle = viewModel::toggleFavorite,
+                                favorites = state.favorites,
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                    }
+
+                    item {
+                        SectionTitle("Videos")
+                        state.errorText?.let {
+                            Text(
+                                text = it,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                        state.actionText?.let {
+                            Text(
+                                text = it,
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+
+                    items(state.videos, key = { it.id }) { video ->
+                        val isFavorite = state.favorites.any { it.id == video.id }
+                        MainVideoCard(
+                            video = video,
+                            isFavorite = isFavorite,
+                            onPlay = { viewModel.playVideo(video) },
+                            onFavorite = { viewModel.toggleFavorite(video) },
+                        )
+                    }
+
+                    item {
+                        Spacer(modifier = Modifier.height(20.dp))
+                    }
                 }
             }
         }
@@ -441,6 +448,13 @@ private fun VideoCard(
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
             )
+
+            DurationBadge(
+                durationSeconds = video.durationSeconds,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp),
+            )
         }
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -487,6 +501,13 @@ private fun MainVideoCard(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
+            )
+
+            DurationBadge(
+                durationSeconds = video.durationSeconds,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp),
             )
         }
 
@@ -568,6 +589,24 @@ private fun FavoriteHeartButton(
             contentDescription = if (isFavorite) "Remove favorite" else "Add favorite",
             tint = tint,
             modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
+private fun DurationBadge(durationSeconds: UInt?, modifier: Modifier = Modifier) {
+    val formatted = formatVideoDuration(durationSeconds) ?: return
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.72f))
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = formatted,
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -1167,6 +1206,21 @@ private fun formatPlayerTime(ms: Long): String {
         "%d:%02d:%02d".format(hours, minutes, seconds)
     } else {
         "%02d:%02d".format(minutes, seconds)
+    }
+}
+
+private fun formatVideoDuration(durationSeconds: UInt?): String? {
+    val seconds = durationSeconds?.toLong() ?: return null
+    if (seconds <= 0L) {
+        return null
+    }
+    val hours = seconds / 3600L
+    val minutes = (seconds % 3600L) / 60L
+    val remainingSeconds = seconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(hours, minutes, remainingSeconds)
+    } else {
+        "%02d:%02d".format(minutes, remainingSeconds)
     }
 }
 
