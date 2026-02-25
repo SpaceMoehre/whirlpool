@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.whirlpool.app.data.EngineRepository
+import com.whirlpool.engine.StatusChannel
+import com.whirlpool.engine.StatusChoice
+import com.whirlpool.engine.StatusFilterOption
 import com.whirlpool.engine.VideoItem
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -22,7 +25,9 @@ data class WhirlpoolUiState(
     val videos: List<VideoItem> = emptyList(),
     val favorites: List<VideoItem> = emptyList(),
     val categories: List<String> = emptyList(),
+    val channelDetails: List<StatusChannel> = emptyList(),
     val activeChannel: String = "catflix",
+    val selectedFilters: Map<String, String> = emptyMap(),
     val selectedVideo: VideoItem? = null,
     val streamUrl: String? = null,
     val streamHeaders: Map<String, String> = emptyMap(),
@@ -56,7 +61,23 @@ class WhirlpoolViewModel(
             runCatching {
                 withContext(Dispatchers.IO) {
                     val status = repository.status()
-                    val discovered = repository.discover(current.query)
+                    val channels = normalizeChannels(status)
+                    val selectedChannel = channels.firstOrNull { channel ->
+                        channel.id == current.activeChannel
+                    } ?: channels.firstOrNull()
+                    val nextChannelId = selectedChannel?.id ?: current.activeChannel
+                    val normalizedFilters = normalizeFilterSelection(
+                        selectedChannel,
+                        current.selectedFilters,
+                    )
+
+                    val discovered = repository.discover(
+                        query = current.query,
+                        page = 1u,
+                        limit = 10u,
+                        channelId = nextChannelId,
+                        filters = normalizedFilters,
+                    )
                     val videos = discovered
                     val favoriteIds = repository.favorites().map { it.videoId }.toSet()
                     val favoriteVideos = videos.filter { it.id in favoriteIds }
@@ -67,7 +88,9 @@ class WhirlpoolViewModel(
                         videos = videos,
                         favorites = favoriteVideos,
                         categories = status.sources,
-                        activeChannel = status.channels.firstOrNull() ?: current.activeChannel,
+                        channelDetails = channels,
+                        activeChannel = nextChannelId,
+                        selectedFilters = normalizedFilters,
                         actionText = null,
                         errorText = null,
                     )
@@ -87,6 +110,38 @@ class WhirlpoolViewModel(
 
     fun search() {
         refreshAll()
+    }
+
+    fun onChannelSelected(channelId: String) {
+        val current = mutableState.value
+        val selectedChannel = current.channelDetails.firstOrNull { channel -> channel.id == channelId }
+        val normalizedFilters = normalizeFilterSelection(selectedChannel, current.selectedFilters)
+        mutableState.value = current.copy(
+            activeChannel = channelId,
+            selectedFilters = normalizedFilters,
+        )
+        search()
+    }
+
+    fun onFilterSelected(optionId: String, choiceId: String) {
+        val current = mutableState.value
+        val selectedChannel = current.channelDetails.firstOrNull { channel ->
+            channel.id == current.activeChannel
+        } ?: return
+        val validChoice = selectedChannel
+            .options
+            .firstOrNull { option -> option.id == optionId }
+            ?.choices
+            ?.any { choice -> choice.id == choiceId }
+            ?: false
+        if (!validChoice) {
+            return
+        }
+
+        mutableState.value = current.copy(
+            selectedFilters = current.selectedFilters + (optionId to choiceId),
+        )
+        search()
     }
 
     fun playVideo(video: VideoItem) {
@@ -242,6 +297,49 @@ class WhirlpoolViewModel(
         val existing = mutableState.value.logs
         val updated = (existing + entry).takeLast(200)
         mutableState.value = mutableState.value.copy(logs = updated)
+    }
+
+    private fun normalizeChannels(status: com.whirlpool.engine.StatusSummary): List<StatusChannel> {
+        if (status.channelDetails.isNotEmpty()) {
+            return status.channelDetails
+        }
+        return status.channels.map { channelId ->
+            StatusChannel(
+                id = channelId,
+                title = channelId,
+                options = emptyList(),
+            )
+        }
+    }
+
+    private fun normalizeFilterSelection(
+        channel: StatusChannel?,
+        currentSelection: Map<String, String>,
+    ): Map<String, String> {
+        val channelOptions = channel?.options.orEmpty()
+        if (channelOptions.isEmpty()) {
+            return emptyMap()
+        }
+
+        val out = linkedMapOf<String, String>()
+        channelOptions.forEach { option ->
+            val chosen = pickChoice(option, currentSelection[option.id])
+            if (chosen != null) {
+                out[option.id] = chosen.id
+            }
+        }
+        return out
+    }
+
+    private fun pickChoice(
+        option: StatusFilterOption,
+        selectedChoiceId: String?,
+    ): StatusChoice? {
+        if (option.choices.isEmpty()) {
+            return null
+        }
+        return option.choices.firstOrNull { choice -> choice.id == selectedChoiceId }
+            ?: option.choices.first()
     }
 
     companion object {

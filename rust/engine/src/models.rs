@@ -17,9 +17,36 @@ pub struct StatusSummary {
     pub primary_color: Option<String>,
     pub secondary_color: Option<String>,
     pub channels: Vec<String>,
+    pub channel_details: Vec<StatusChannel>,
     pub sources: Vec<String>,
     pub adblock_required: bool,
     pub source_releases_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct StatusChannel {
+    pub id: String,
+    pub title: String,
+    pub options: Vec<StatusFilterOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct StatusFilterOption {
+    pub id: String,
+    pub title: String,
+    pub choices: Vec<StatusChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct StatusChoice {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct FilterSelection {
+    pub option_id: String,
+    pub choice_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]

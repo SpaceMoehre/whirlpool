@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use reqwest::StatusCode;
 use serde_json::json;
 
@@ -5,7 +7,7 @@ use crate::curl_cffi::fetch_with_curl_cffi;
 use crate::errors::EngineError;
 use crate::models::{
     ApiStatusChannel, ApiStatusResponse, ApiVideoEnvelope, ApiVideoRecord, EngineConfig,
-    StatusSummary, VideoItem,
+    FilterSelection, StatusChannel, StatusChoice, StatusFilterOption, StatusSummary, VideoItem,
 };
 
 const DEFAULT_USER_AGENT: &str = "whirlpool-engine/0.1 (+android; uniffi)";
@@ -29,7 +31,8 @@ impl ApiClient {
     pub fn fetch_status(&self) -> Result<StatusSummary, EngineError> {
         let parsed = self.fetch_status_payload()?;
         let channels = parsed.channels.unwrap_or_default();
-        let channel_ids = channels.into_iter().map(|channel| channel.id).collect();
+        let channel_ids = channels.iter().map(|channel| channel.id.clone()).collect();
+        let channel_details = channels.into_iter().map(map_status_channel).collect();
 
         Ok(StatusSummary {
             name: parsed.name.unwrap_or_else(|| "unknown".to_string()),
@@ -40,33 +43,31 @@ impl ApiClient {
             primary_color: parsed.primary_color.or(parsed.color),
             secondary_color: parsed.secondary_color,
             channels: channel_ids,
+            channel_details,
             sources: parsed.sources.or(parsed.categories).unwrap_or_default(),
             adblock_required: parsed.adblock_required.unwrap_or(false),
             source_releases_url: parsed.source_releases_url,
         })
     }
 
-    pub fn discover_videos(
+    pub fn discover_videos_with_filters(
         &self,
         query: &str,
         page: u32,
         limit: u32,
+        channel_id: Option<&str>,
+        selections: &[FilterSelection],
     ) -> Result<Vec<VideoItem>, EngineError> {
         let status = self.fetch_status_payload()?;
-        let selected_channel = select_channel(&status).ok_or_else(|| EngineError::NotFound {
-            detail: "no active channel returned by /api/status".to_string(),
-        })?;
-        let selected_sort = select_sort(selected_channel).to_string();
-        let selected_channel_id = selected_channel.id.clone();
+        let selected_channel =
+            select_channel_with_id_or_default(&status, channel_id).ok_or_else(|| {
+                EngineError::NotFound {
+                    detail: "no active channel returned by /api/status".to_string(),
+                }
+            })?;
 
-        let payload = json!({
-            "channel": selected_channel_id,
-            "sort": selected_sort,
-            "query": query,
-            "page": page,
-            "perPage": limit.to_string(),
-        })
-        .to_string();
+        let payload =
+            build_videos_payload(selected_channel, query, page, limit, selections).to_string();
 
         let primary = format!("{}/api/videos", self.base_url);
         let body = self.fetch_text("POST", &primary, Some(&payload))?;
@@ -180,20 +181,96 @@ fn select_channel(status: &ApiStatusResponse) -> Option<&ApiStatusChannel> {
         .or_else(|| channels.first())
 }
 
-fn select_sort(channel: &ApiStatusChannel) -> &str {
-    channel
+fn select_channel_with_id_or_default<'a>(
+    status: &'a ApiStatusResponse,
+    channel_id: Option<&str>,
+) -> Option<&'a ApiStatusChannel> {
+    let channels = status.channels.as_ref()?;
+    if let Some(channel_id) = channel_id.filter(|id| !id.trim().is_empty()) {
+        if let Some(channel) = channels.iter().find(|channel| channel.id == channel_id) {
+            return Some(channel);
+        }
+    }
+    select_channel(status)
+}
+
+fn map_status_channel(channel: ApiStatusChannel) -> StatusChannel {
+    let title = channel.name.unwrap_or_else(|| channel.id.clone());
+    let options = channel
         .options
-        .iter()
-        .find(|option| option.id == "sort")
-        .and_then(|option| {
-            option
+        .into_iter()
+        .map(|option| {
+            let option_title = option.title.unwrap_or_else(|| option.id.clone());
+            let choices = option
                 .options
-                .iter()
-                .find(|entry| entry.id == "latest")
-                .or_else(|| option.options.first())
+                .into_iter()
+                .map(|choice| StatusChoice {
+                    id: choice.id.clone(),
+                    title: choice.title.unwrap_or(choice.id),
+                })
+                .collect();
+            StatusFilterOption {
+                id: option.id,
+                title: option_title,
+                choices,
+            }
         })
-        .map(|entry| entry.id.as_str())
-        .unwrap_or("latest")
+        .collect();
+
+    StatusChannel {
+        id: channel.id,
+        title,
+        options,
+    }
+}
+
+fn build_videos_payload(
+    channel: &ApiStatusChannel,
+    query: &str,
+    page: u32,
+    limit: u32,
+    selections: &[FilterSelection],
+) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("channel".to_string(), json!(channel.id));
+    payload.insert("query".to_string(), json!(query));
+    payload.insert("page".to_string(), json!(page.to_string()));
+    payload.insert("perPage".to_string(), json!(limit.to_string()));
+
+    let explicit_selections: HashMap<&str, &str> = selections
+        .iter()
+        .filter_map(|selection| {
+            let option_id = selection.option_id.trim();
+            let choice_id = selection.choice_id.trim();
+            if option_id.is_empty() || choice_id.is_empty() {
+                return None;
+            }
+            Some((option_id, choice_id))
+        })
+        .collect();
+
+    for option in &channel.options {
+        if option.id.trim().is_empty() || option.options.is_empty() {
+            continue;
+        }
+
+        let selected_id = explicit_selections
+            .get(option.id.as_str())
+            .and_then(|candidate| {
+                option
+                    .options
+                    .iter()
+                    .find(|choice| choice.id == **candidate)
+                    .map(|choice| choice.id.as_str())
+            })
+            .or_else(|| option.options.first().map(|choice| choice.id.as_str()));
+
+        if let Some(selected_id) = selected_id {
+            payload.insert(option.id.clone(), json!(selected_id));
+        }
+    }
+
+    serde_json::Value::Object(payload)
 }
 
 fn parse_videos(body: &str, default_channel_id: &str) -> Result<Vec<VideoItem>, EngineError> {
@@ -292,7 +369,11 @@ mod tests {
         let channel = select_channel(&parsed).expect("select channel");
         assert_eq!(channel.id, "catflix");
         assert!(channel.default);
-        assert_eq!(select_sort(channel), "latest");
+        let payload = build_videos_payload(channel, "", 1, 10, &[]);
+        assert_eq!(
+            payload.get("sort").and_then(|value| value.as_str()),
+            Some("views")
+        );
     }
 
     #[test]
@@ -396,7 +477,75 @@ mod tests {
 
         let channel = select_channel(&status).expect("default channel");
         assert_eq!(channel.id, "catflix");
-        assert_eq!(select_sort(channel), "latest");
+        let payload = build_videos_payload(channel, "", 1, 10, &[]);
+        assert_eq!(
+            payload.get("sort").and_then(|value| value.as_str()),
+            Some("views")
+        );
+        assert_eq!(
+            payload.get("page").and_then(|value| value.as_str()),
+            Some("1")
+        );
+        assert_eq!(
+            payload.get("perPage").and_then(|value| value.as_str()),
+            Some("10")
+        );
+    }
+
+    #[test]
+    fn payload_uses_explicit_option_selection_when_valid() {
+        let status: ApiStatusResponse = serde_json::from_str(
+            r#"{
+                "channels": [{
+                    "id": "catflix",
+                    "default": true,
+                    "options": [{
+                        "id": "sort",
+                        "options": [
+                            { "id": "views" },
+                            { "id": "latest" }
+                        ]
+                    }, {
+                        "id": "duration",
+                        "options": [
+                            { "id": "short" },
+                            { "id": "long" }
+                        ]
+                    }]
+                }]
+            }"#,
+        )
+        .expect("parse status");
+
+        let channel = select_channel(&status).expect("default channel");
+        let payload = build_videos_payload(
+            channel,
+            "kittens",
+            1,
+            10,
+            &[
+                FilterSelection {
+                    option_id: "sort".to_string(),
+                    choice_id: "latest".to_string(),
+                },
+                FilterSelection {
+                    option_id: "duration".to_string(),
+                    choice_id: "long".to_string(),
+                },
+            ],
+        );
+        assert_eq!(
+            payload.get("sort").and_then(|value| value.as_str()),
+            Some("latest")
+        );
+        assert_eq!(
+            payload.get("duration").and_then(|value| value.as_str()),
+            Some("long")
+        );
+        assert_eq!(
+            payload.get("query").and_then(|value| value.as_str()),
+            Some("kittens")
+        );
     }
 
     #[test]
@@ -418,7 +567,7 @@ mod tests {
         );
 
         let videos = client
-            .discover_videos("", 1, 10)
+            .discover_videos_with_filters("", 1, 10, None, &[])
             .expect("fetch and parse videos");
         assert!(!videos.is_empty(), "videos response should not be empty");
         assert!(

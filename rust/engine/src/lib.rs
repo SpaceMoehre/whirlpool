@@ -12,8 +12,8 @@ use api::ApiClient;
 use db::Database;
 use errors::EngineError;
 use models::{
-    BridgeHealth, EngineConfig, FavoriteItem, ResolvedVideo, StatusSummary, VideoItem,
-    YtDlpUpdateInfo,
+    BridgeHealth, EngineConfig, FavoriteItem, FilterSelection, ResolvedVideo, StatusSummary,
+    VideoItem, YtDlpUpdateInfo,
 };
 use updater::{check_yt_dlp_update, default_release_api};
 use ytdlp::YtDlpClient;
@@ -53,7 +53,9 @@ impl Engine {
     }
 
     pub fn sync_status(&self) -> Result<StatusSummary, EngineError> {
-        self.api.fetch_status()
+        let status = self.api.fetch_status()?;
+        self.db.sync_categories(&status.sources)?;
+        Ok(status)
     }
 
     pub fn discover_videos(
@@ -62,8 +64,23 @@ impl Engine {
         page: u32,
         limit: u32,
     ) -> Result<Vec<VideoItem>, EngineError> {
-        let videos = self.api.discover_videos(&query, page, limit)?;
+        self.discover_videos_with_filters(query, page, limit, String::new(), vec![])
+    }
+
+    pub fn discover_videos_with_filters(
+        &self,
+        query: String,
+        page: u32,
+        limit: u32,
+        channel_id: String,
+        filters: Vec<FilterSelection>,
+    ) -> Result<Vec<VideoItem>, EngineError> {
+        let channel = non_empty(&channel_id);
+        let videos = self
+            .api
+            .discover_videos_with_filters(&query, page, limit, channel, &filters)?;
         self.db.cache_videos(&videos)?;
+        self.db.record_search(&query)?;
         Ok(videos)
     }
 
@@ -178,7 +195,16 @@ const _: fn() = || {
 pub use errors::EngineError as UniFfiEngineError;
 pub use models::{
     BridgeHealth as UniFfiBridgeHealth, EngineConfig as UniFfiEngineConfig,
-    FavoriteItem as UniFfiFavoriteItem, ResolvedVideo as UniFfiResolvedVideo,
-    StatusSummary as UniFfiStatusSummary, VideoItem as UniFfiVideoItem,
-    YtDlpUpdateInfo as UniFfiYtDlpUpdateInfo,
+    FavoriteItem as UniFfiFavoriteItem, FilterSelection as UniFfiFilterSelection,
+    ResolvedVideo as UniFfiResolvedVideo, StatusSummary as UniFfiStatusSummary,
+    VideoItem as UniFfiVideoItem, YtDlpUpdateInfo as UniFfiYtDlpUpdateInfo,
 };
+
+fn non_empty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}

@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -33,6 +34,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -64,6 +66,8 @@ import coil.compose.AsyncImage
 import com.whirlpool.app.R
 import com.whirlpool.app.player.VideoPlayerControls
 import com.whirlpool.app.player.VideoPlayerSurface
+import com.whirlpool.engine.StatusChannel
+import com.whirlpool.engine.StatusFilterOption
 import com.whirlpool.engine.VideoItem
 import kotlinx.coroutines.delay
 
@@ -238,7 +242,11 @@ fun WhirlpoolScreen(
                 FiltersSheet(
                     darkModeEnabled = darkModeEnabled,
                     serverHost = "getfigleaf.com",
-                    channelName = state.activeChannel,
+                    channels = state.channelDetails,
+                    activeChannelId = state.activeChannel,
+                    selectedFilters = state.selectedFilters,
+                    onChannelSelected = viewModel::onChannelSelected,
+                    onFilterSelected = viewModel::onFilterSelected,
                     onClose = { showFilters = false },
                     onExport = viewModel::exportDatabase,
                     onImport = viewModel::importDatabase,
@@ -695,12 +703,20 @@ private fun SettingsSheet(
 private fun FiltersSheet(
     darkModeEnabled: Boolean,
     serverHost: String,
-    channelName: String,
+    channels: List<StatusChannel>,
+    activeChannelId: String,
+    selectedFilters: Map<String, String>,
+    onChannelSelected: (String) -> Unit,
+    onFilterSelected: (optionId: String, choiceId: String) -> Unit,
     onClose: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
 ) {
     val palette = menuPalette(darkModeEnabled)
+    val activeChannel = channels.firstOrNull { channel -> channel.id == activeChannelId }
+        ?: channels.firstOrNull()
+    var showChannelSelector by remember { mutableStateOf(false) }
+    var selectedOptionForDialog by remember { mutableStateOf<StatusFilterOption?>(null) }
 
     Column(
         modifier = Modifier
@@ -727,20 +743,39 @@ private fun FiltersSheet(
             darkModeEnabled = darkModeEnabled,
             title = "NETWORK",
             rows = listOf(
-                "Server" to serverHost,
-                "Channel" to channelName,
+                FilterMenuRow(
+                    label = "Server",
+                    value = serverHost,
+                    enabled = false,
+                    onClick = null,
+                ),
+                FilterMenuRow(
+                    label = "Channel",
+                    value = activeChannel?.title ?: activeChannelId,
+                    enabled = channels.isNotEmpty(),
+                    onClick = { showChannelSelector = true },
+                ),
             ),
         )
 
         FilterSection(
             darkModeEnabled = darkModeEnabled,
             title = "FILTERS",
-            rows = listOf(
-                "Sort" to "Top Rated",
-                "Duration" to "Short (<10 min)",
-                "Production Type" to "All Content",
-                "Sexuality" to "Straight",
-            ),
+            rows = activeChannel
+                ?.options
+                ?.map { option ->
+                    FilterMenuRow(
+                        label = option.title,
+                        value = selectedChoiceTitle(option, selectedFilters),
+                        enabled = option.choices.isNotEmpty(),
+                        onClick = {
+                            if (option.choices.isNotEmpty()) {
+                                selectedOptionForDialog = option
+                            }
+                        },
+                    )
+                }
+                .orEmpty(),
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -749,10 +784,36 @@ private fun FiltersSheet(
         }
         Spacer(modifier = Modifier.height(24.dp))
     }
+
+    if (showChannelSelector) {
+        SelectionDialog(
+            title = "Choose Channel",
+            options = channels.map { channel -> channel.id to channel.title },
+            selectedId = activeChannel?.id,
+            onSelect = { selected ->
+                onChannelSelected(selected)
+                showChannelSelector = false
+            },
+            onDismiss = { showChannelSelector = false },
+        )
+    }
+
+    selectedOptionForDialog?.let { option ->
+        SelectionDialog(
+            title = option.title,
+            options = option.choices.map { choice -> choice.id to choice.title },
+            selectedId = selectedFilters[option.id],
+            onSelect = { selected ->
+                onFilterSelected(option.id, selected)
+                selectedOptionForDialog = null
+            },
+            onDismiss = { selectedOptionForDialog = null },
+        )
+    }
 }
 
 @Composable
-private fun FilterSection(darkModeEnabled: Boolean, title: String, rows: List<Pair<String, String>>) {
+private fun FilterSection(darkModeEnabled: Boolean, title: String, rows: List<FilterMenuRow>) {
     val palette = menuPalette(darkModeEnabled)
 
     Text(
@@ -776,18 +837,25 @@ private fun FilterSection(darkModeEnabled: Boolean, title: String, rows: List<Pa
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(palette.row)
+                        .then(
+                            if (row.enabled && row.onClick != null) {
+                                Modifier.hapticClickable(onClick = row.onClick)
+                            } else {
+                                Modifier
+                            },
+                        )
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        row.first,
+                        row.label,
                         style = MaterialTheme.typography.titleMedium,
                         color = palette.primaryText,
                     )
                     Text(
-                        row.second,
+                        row.value,
                         color = palette.secondaryText,
                         style = MaterialTheme.typography.titleMedium,
                     )
@@ -803,6 +871,64 @@ private fun FilterSection(darkModeEnabled: Boolean, title: String, rows: List<Pa
             }
         }
     }
+}
+
+private data class FilterMenuRow(
+    val label: String,
+    val value: String,
+    val enabled: Boolean,
+    val onClick: (() -> Unit)?,
+)
+
+private fun selectedChoiceTitle(
+    option: StatusFilterOption,
+    selectedFilters: Map<String, String>,
+): String {
+    val selectedId = selectedFilters[option.id]
+    return option.choices.firstOrNull { choice -> choice.id == selectedId }?.title
+        ?: option.choices.firstOrNull()?.title
+        ?: "Not set"
+}
+
+@Composable
+private fun SelectionDialog(
+    title: String,
+    options: List<Pair<String, String>>,
+    selectedId: String?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { option ->
+                    val isSelected = option.first == selectedId
+                    Text(
+                        text = option.second,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                            .hapticClickable { onSelect(option.first) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
 }
 
 @Composable

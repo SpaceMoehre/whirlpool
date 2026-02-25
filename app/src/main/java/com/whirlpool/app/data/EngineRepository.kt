@@ -7,6 +7,7 @@ import com.chaquo.python.android.AndroidPlatform
 import com.whirlpool.engine.Engine
 import com.whirlpool.engine.EngineConfig
 import com.whirlpool.engine.FavoriteItem
+import com.whirlpool.engine.FilterSelection
 import com.whirlpool.engine.StatusSummary
 import com.whirlpool.engine.VideoItem
 import java.io.File
@@ -43,8 +44,23 @@ class EngineRepository(private val context: Context) {
 
     fun status(): StatusSummary = engine.syncStatus()
 
-    fun discover(query: String, page: UInt = 1u, limit: UInt = 30u): List<VideoItem> {
-        return engine.discoverVideos(query = query, page = page, limit = limit)
+    fun discover(
+        query: String,
+        page: UInt = 1u,
+        limit: UInt = 10u,
+        channelId: String = "",
+        filters: Map<String, String> = emptyMap(),
+    ): List<VideoItem> {
+        val selections = filters.entries.map { entry ->
+            FilterSelection(optionId = entry.key, choiceId = entry.value)
+        }
+        return engine.discoverVideosWithFilters(
+            query = query,
+            page = page,
+            limit = limit,
+            channelId = channelId,
+            filters = selections,
+        )
     }
 
     fun resolve(pageUrl: String): PlaybackResolution = ytDlpResolver.resolve(pageUrl)
