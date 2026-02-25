@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             var darkModeEnabled by rememberSaveable {
-                mutableStateOf(settingsPrefs.getBoolean(KEY_DARK_MODE, false))
+                mutableStateOf(settingsPrefs.getBoolean(KEY_DARK_MODE, true))
             }
 
             WhirlpoolTheme(darkTheme = darkModeEnabled) {

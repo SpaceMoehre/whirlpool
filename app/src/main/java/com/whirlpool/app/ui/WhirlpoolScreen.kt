@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -122,81 +123,82 @@ fun WhirlpoolScreen(
         return
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                HeaderRow(
-                    onSettings = { showSettings = true },
-                    onFilters = { showFilters = true },
-                )
-            }
-
-            item {
-                SearchBar(
-                    query = state.query,
-                    onQueryChange = viewModel::onQueryChange,
-                    onSearch = viewModel::search,
-                )
-            }
-
-            item {
-                SectionTitle("Categories")
-                CategoriesRow(state.categories)
-            }
-
-            item {
-                SectionTitle("Favorites")
-                if (state.favorites.isNotEmpty()) {
-                    VideosRow(
-                        videos = state.favorites,
-                        onPlay = viewModel::playVideo,
-                        onFavoriteToggle = viewModel::toggleFavorite,
-                        favorites = state.favorites,
-                    )
-                } else {
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-            }
-
-            item {
-                SectionTitle("Videos")
-                state.errorText?.let {
-                    Text(
-                        text = it,
-                        color = Color(0xFFC2412D),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    HeaderRow(
+                        onSettings = { showSettings = true },
+                        onFilters = { showFilters = true },
                     )
                 }
-                state.actionText?.let {
-                    Text(
-                        text = it,
-                        color = Color(0xFF2563EB),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+
+                item {
+                    SearchBar(
+                        query = state.query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onSearch = viewModel::search,
                     )
                 }
-            }
 
-            items(state.videos, key = { it.id }) { video ->
-                val isFavorite = state.favorites.any { it.id == video.id }
-                MainVideoCard(
-                    video = video,
-                    isFavorite = isFavorite,
-                    onPlay = { viewModel.playVideo(video) },
-                    onFavorite = { viewModel.toggleFavorite(video) },
-                )
-            }
+                item {
+                    SectionTitle("Categories")
+                    CategoriesRow(state.categories)
+                }
 
-            item {
-                Spacer(modifier = Modifier.height(20.dp))
+                item {
+                    SectionTitle("Favorites")
+                    if (state.favorites.isNotEmpty()) {
+                        VideosRow(
+                            videos = state.favorites,
+                            onPlay = viewModel::playVideo,
+                            onFavoriteToggle = viewModel::toggleFavorite,
+                            favorites = state.favorites,
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                }
+
+                item {
+                    SectionTitle("Videos")
+                    state.errorText?.let {
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                    state.actionText?.let {
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+
+                items(state.videos, key = { it.id }) { video ->
+                    val isFavorite = state.favorites.any { it.id == video.id }
+                    MainVideoCard(
+                        video = video,
+                        isFavorite = isFavorite,
+                        onPlay = { viewModel.playVideo(video) },
+                        onFavorite = { viewModel.toggleFavorite(video) },
+                    )
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
             }
         }
 
@@ -249,6 +251,7 @@ private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
         Text(
             text = "⚙",
             style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .clickable(onClick = onSettings),
@@ -258,12 +261,14 @@ private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
             text = "Whirlpool",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.align(Alignment.Center),
         )
 
         Text(
             text = "◍",
             style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .clickable(onClick = onFilters),
@@ -288,7 +293,7 @@ private fun SearchBar(
         trailingIcon = {
             Text(
                 text = "Go",
-                color = Color(0xFF2563EB),
+                color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .clip(CircleShape)
                     .clickable(onClick = onSearch)
@@ -308,7 +313,12 @@ private fun SectionTitle(title: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
     }
 }
 
@@ -458,7 +468,7 @@ private fun MainVideoCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF8E8E93),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
