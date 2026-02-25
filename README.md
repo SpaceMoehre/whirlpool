@@ -17,6 +17,7 @@
   <img src="./images/main_screen.png" alt="Whirlpool main screen" width="48%" />
   <img src="./images/video_player.png" alt="Whirlpool video player" width="48%" />
 </p>
+
 ## Installation
 
 If you already have an APK build artifact, install it directly:
