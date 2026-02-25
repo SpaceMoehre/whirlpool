@@ -41,3 +41,4 @@
 - `Engine` is `Send + Sync` asserted at compile-time in Rust.
 - Kotlin only consumes UniFFI-generated interfaces; no direct JNI pointer handling in app code.
 - SQLite write/read ownership remains in Rust; Kotlin never writes DB files directly.
+

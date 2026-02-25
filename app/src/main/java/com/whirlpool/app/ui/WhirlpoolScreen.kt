@@ -3,7 +3,6 @@ package com.whirlpool.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -34,19 +34,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,6 +108,17 @@ private fun menuPalette(darkModeEnabled: Boolean): MenuPalette {
     }
 }
 
+private fun Modifier.hapticClickable(
+    hapticType: HapticFeedbackType = HapticFeedbackType.TextHandleMove,
+    onClick: () -> Unit,
+): Modifier = composed {
+    val haptics = LocalHapticFeedback.current
+    clickable {
+        haptics.performHapticFeedback(hapticType)
+        onClick()
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WhirlpoolScreen(
@@ -149,7 +168,13 @@ fun WhirlpoolScreen(
 
                 item {
                     SectionTitle("Categories")
-                    CategoriesRow(state.categories)
+                    CategoriesRow(
+                        categories = state.categories,
+                        onCategoryClick = { category ->
+                            viewModel.onQueryChange(category)
+                            viewModel.search()
+                        },
+                    )
                 }
 
                 item {
@@ -246,15 +271,17 @@ private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Text(
-            text = "⚙",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground,
+        Icon(
+            painter = painterResource(id = R.drawable.ic_whirlpool_settings),
+            contentDescription = "Settings",
+            tint = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .clickable(onClick = onSettings),
+                .size(24.dp)
+                .hapticClickable(onClick = onSettings),
         )
 
         Text(
@@ -265,13 +292,14 @@ private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
             modifier = Modifier.align(Alignment.Center),
         )
 
-        Text(
-            text = "◍",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground,
+        Icon(
+            painter = painterResource(id = R.drawable.ic_whirlpool_filter),
+            contentDescription = "Filters",
+            tint = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .clickable(onClick = onFilters),
+                .size(24.dp)
+                .hapticClickable(onClick = onFilters),
         )
     }
 }
@@ -291,13 +319,13 @@ private fun SearchBar(
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
         trailingIcon = {
-            Text(
-                text = "Go",
-                color = MaterialTheme.colorScheme.primary,
+            Icon(
+                painter = painterResource(id = R.drawable.ic_whirlpool_search),
+                contentDescription = "Search",
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(onClick = onSearch)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .size(22.dp)
+                    .hapticClickable(onClick = onSearch),
             )
         },
         shape = RoundedCornerShape(12.dp),
@@ -323,7 +351,10 @@ private fun SectionTitle(title: String) {
 }
 
 @Composable
-private fun CategoriesRow(categories: List<String>) {
+private fun CategoriesRow(
+    categories: List<String>,
+    onCategoryClick: (String) -> Unit,
+) {
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -335,6 +366,7 @@ private fun CategoriesRow(categories: List<String>) {
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
                     .background(Brush.horizontalGradient(gradient))
+                    .hapticClickable { onCategoryClick(title) }
                     .padding(horizontal = 24.dp, vertical = 20.dp),
             ) {
                 Text(
@@ -381,7 +413,7 @@ private fun VideoCard(
     Column(
         modifier = Modifier
             .width(220.dp)
-            .clickable(onClick = onPlay),
+            .hapticClickable(onClick = onPlay),
     ) {
         Box {
             AsyncImage(
@@ -394,14 +426,12 @@ private fun VideoCard(
                 contentScale = ContentScale.Crop,
             )
 
-            Text(
-                text = if (isFavorite) "♥" else "♡",
-                color = if (isFavorite) Color(0xFFFF3B30) else Color.White,
-                style = MaterialTheme.typography.titleMedium,
+            FavoriteHeartButton(
+                isFavorite = isFavorite,
+                onToggle = onFavorite,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
-                    .clickable(onClick = onFavorite),
             )
         }
 
@@ -429,7 +459,7 @@ private fun MainVideoCard(
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onPlay)
+            .hapticClickable(onClick = onPlay)
             .padding(10.dp),
     ) {
         Box {
@@ -443,14 +473,12 @@ private fun MainVideoCard(
                 contentScale = ContentScale.Crop,
             )
 
-            Text(
-                text = if (isFavorite) "♥" else "♡",
-                color = if (isFavorite) Color(0xFFFF3B30) else Color.White,
-                style = MaterialTheme.typography.titleMedium,
+            FavoriteHeartButton(
+                isFavorite = isFavorite,
+                onToggle = onFavorite,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
-                    .clickable(onClick = onFavorite),
             )
         }
 
@@ -475,6 +503,68 @@ private fun MainVideoCard(
 }
 
 @Composable
+private fun FavoriteHeartButton(
+    isFavorite: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var pulse by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pulse) 1.2f else 1f,
+        animationSpec = spring(dampingRatio = 0.45f, stiffness = 480f),
+        label = "favoriteScale",
+    )
+    val burstAlpha by animateFloatAsState(
+        targetValue = if (pulse) 0.28f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "favoriteBurstAlpha",
+    )
+    val tint by animateColorAsState(
+        targetValue = if (isFavorite) Color(0xFFFF4D73) else Color.White,
+        animationSpec = tween(durationMillis = 220),
+        label = "favoriteTint",
+    )
+
+    LaunchedEffect(pulse) {
+        if (pulse) {
+            delay(120L)
+            pulse = false
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .size(28.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.25f))
+            .hapticClickable(hapticType = HapticFeedbackType.LongPress) {
+                pulse = true
+                onToggle()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFFF4D73).copy(alpha = burstAlpha)),
+        )
+        Icon(
+            painter = painterResource(
+                id = if (isFavorite) R.drawable.ic_whirlpool_favorite else R.drawable.ic_whirlpool_favorite_border,
+            ),
+            contentDescription = if (isFavorite) "Remove favorite" else "Add favorite",
+            tint = tint,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
 private fun SettingsSheet(
     darkModeEnabled: Boolean,
     onDarkModeToggle: (Boolean) -> Unit,
@@ -483,6 +573,7 @@ private fun SettingsSheet(
     onClose: () -> Unit,
 ) {
     val palette = menuPalette(darkModeEnabled)
+    val haptics = LocalHapticFeedback.current
 
     Column(
         modifier = Modifier
@@ -495,7 +586,7 @@ private fun SettingsSheet(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Close", color = palette.actionText, modifier = Modifier.clickable(onClick = onClose))
+            Text("Close", color = palette.actionText, modifier = Modifier.hapticClickable(onClick = onClose))
             Text(
                 "Settings",
                 style = MaterialTheme.typography.titleLarge,
@@ -533,7 +624,10 @@ private fun SettingsSheet(
                 }
                 Switch(
                     checked = darkModeEnabled,
-                    onCheckedChange = onDarkModeToggle,
+                    onCheckedChange = { enabled ->
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onDarkModeToggle(enabled)
+                    },
                 )
             }
         }
@@ -562,7 +656,7 @@ private fun SettingsSheet(
                         "Clear",
                         color = palette.actionText,
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.clickable(onClick = onClearLogs),
+                        modifier = Modifier.hapticClickable(onClick = onClearLogs),
                     )
                 }
                 Column(
@@ -619,7 +713,7 @@ private fun FiltersSheet(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Close", color = palette.actionText, modifier = Modifier.clickable(onClick = onClose))
+            Text("Close", color = palette.actionText, modifier = Modifier.hapticClickable(onClick = onClose))
             Text(
                 "Filters",
                 style = MaterialTheme.typography.titleLarge,
@@ -719,7 +813,7 @@ private fun ActionPill(darkModeEnabled: Boolean, label: String, onClick: () -> U
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(palette.row)
-            .clickable(onClick = onClick)
+            .hapticClickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Text(label, color = palette.actionText, fontWeight = FontWeight.SemiBold)
@@ -736,6 +830,7 @@ private fun PlayerMode(
     onClose: () -> Unit,
 ) {
     BackHandler(onBack = onClose)
+    val haptics = LocalHapticFeedback.current
     var controls by remember { mutableStateOf<VideoPlayerControls?>(null) }
     var durationMs by remember { mutableStateOf(0L) }
     var positionMs by remember { mutableStateOf(0L) }
@@ -766,7 +861,7 @@ private fun PlayerMode(
         label = "hudAlpha",
     )
 
-    androidx.compose.runtime.LaunchedEffect(hudTimerToken) {
+    LaunchedEffect(hudTimerToken) {
         delay(5_000L)
         hudVisible = false
     }
@@ -808,13 +903,16 @@ private fun PlayerMode(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "✕",
-                    color = Color.White,
-                    modifier = Modifier.clickable {
-                        keepHudVisible()
-                        onClose()
-                    },
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_whirlpool_close),
+                    contentDescription = "Close player",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .hapticClickable(hapticType = HapticFeedbackType.LongPress) {
+                            keepHudVisible()
+                            onClose()
+                        },
                 )
                 Text(
                     text = title,
@@ -825,7 +923,16 @@ private fun PlayerMode(
                         .weight(1f)
                         .padding(horizontal = 8.dp),
                 )
-                Text("♡", color = Color.White)
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_whirlpool_favorite_border),
+                    contentDescription = "Favorite",
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier
+                        .size(20.dp)
+                        .hapticClickable {
+                            keepHudVisible()
+                        },
+                )
             }
 
             Row(
@@ -835,21 +942,28 @@ private fun PlayerMode(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "↺10",
-                    color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.clickable {
-                        keepHudVisible()
-                        controls?.seekByMs?.invoke(-10_000L)
-                    },
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_whirlpool_rewind),
+                        contentDescription = "Rewind",
+                        tint = Color.White,
+                        modifier = Modifier
+                            .size(26.dp)
+                            .hapticClickable {
+                                keepHudVisible()
+                                controls?.seekByMs?.invoke(-10_000L)
+                            },
+                    )
+                    Text("10s", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                }
                 Box(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.95f))
-                        .clickable { togglePlayback() },
+                        .hapticClickable(hapticType = HapticFeedbackType.LongPress) {
+                            togglePlayback()
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -861,15 +975,20 @@ private fun PlayerMode(
                         modifier = Modifier.size(30.dp),
                     )
                 }
-                Text(
-                    "10↻",
-                    color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.clickable {
-                        keepHudVisible()
-                        controls?.seekByMs?.invoke(10_000L)
-                    },
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_whirlpool_forward),
+                        contentDescription = "Forward",
+                        tint = Color.White,
+                        modifier = Modifier
+                            .size(26.dp)
+                            .hapticClickable {
+                                keepHudVisible()
+                                controls?.seekByMs?.invoke(10_000L)
+                            },
+                    )
+                    Text("10s", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                }
             }
 
             Column(
@@ -887,6 +1006,7 @@ private fun PlayerMode(
                     },
                     onValueChangeFinished = {
                         keepHudVisible()
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         controls?.seekToMs?.invoke(scrubPositionMs)
                         isScrubbing = false
                     },
