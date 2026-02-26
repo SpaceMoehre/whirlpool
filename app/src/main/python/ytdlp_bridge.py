@@ -1,6 +1,7 @@
 import json
+import shlex
 import time
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 import yt_dlp
 from yt_dlp.version import __version__ as YTDLP_VERSION
@@ -153,13 +154,63 @@ def _extract_options(logger: _CollectorLogger) -> Dict[str, Any]:
     }
 
 
-def extract(page_url: str) -> str:
-    if not _is_http_url(page_url):
-        raise RuntimeError("yt-dlp extraction failed: page url must be http(s)")
+def _parse_custom_options(ytdlp_command: str) -> Dict[str, Any]:
+    argv = shlex.split(ytdlp_command)
+    if argv and argv[0].strip().lower() in {"yt-dlp", "yt_dlp"}:
+        argv = argv[1:]
+    if not argv:
+        return {}
 
-    logger = _CollectorLogger()
-    options = _extract_options(logger)
+    parsed = yt_dlp.parse_options(argv)
+    return dict(parsed.ydl_opts or {})
 
+
+def _build_options(logger: _CollectorLogger, ytdlp_command: Optional[str]) -> Dict[str, Any]:
+    base = _extract_options(logger)
+    command = (ytdlp_command or "").strip()
+    if not command:
+        return base
+
+    custom = _parse_custom_options(command)
+    merged = dict(base)
+    merged.update(custom)
+
+    headers = dict(base.get("http_headers") or {})
+    headers.update(_to_headers(custom.get("http_headers")))
+    merged["http_headers"] = headers
+
+    extractor_args = custom.get("extractor_args")
+    if isinstance(extractor_args, dict):
+        merged_extractor_args = dict(base.get("extractor_args") or {})
+        merged_extractor_args.update(extractor_args)
+        merged["extractor_args"] = merged_extractor_args
+    else:
+        merged["extractor_args"] = base.get("extractor_args")
+
+    # Always enforce extraction-safe behavior on Android.
+    merged.update(
+        {
+            "quiet": True,
+            "noprogress": True,
+            "no_warnings": False,
+            "noplaylist": True,
+            "extract_flat": False,
+            "skip_download": True,
+            "allow_unplayable_formats": False,
+            "prefer_ffmpeg": False,
+            "hls_prefer_native": True,
+            "youtube_include_dash_manifest": False,
+            "cachedir": False,
+            "check_formats": False,
+            "js_runtimes": {},
+            "remote_components": set(),
+            "logger": logger,
+        }
+    )
+    return merged
+
+
+def _extract_info(page_url: str, options: Dict[str, Any], logger: _CollectorLogger) -> Dict[str, Any]:
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(page_url, download=False)
@@ -177,6 +228,26 @@ def extract(page_url: str) -> str:
 
     if not isinstance(info, dict):
         raise RuntimeError("yt-dlp returned unexpected payload type")
+    return info
+
+
+def extract(page_url: str, ytdlp_command: Optional[str] = None) -> str:
+    if not _is_http_url(page_url):
+        raise RuntimeError("yt-dlp extraction failed: page url must be http(s)")
+
+    logger = _CollectorLogger()
+    normalized_command = (ytdlp_command or "").strip()
+    if normalized_command:
+        try:
+            info = _extract_info(page_url, _build_options(logger, normalized_command), logger)
+        except (Exception, SystemExit) as custom_err:
+            logger.warning(
+                "custom ytdlpCommand failed, falling back to defaults: "
+                f"{type(custom_err).__name__}: {custom_err}"
+            )
+            info = _extract_info(page_url, _extract_options(logger), logger)
+    else:
+        info = _extract_info(page_url, _extract_options(logger), logger)
 
     candidate = _pick_candidate(info)
     stream_url = str(candidate.get("url"))

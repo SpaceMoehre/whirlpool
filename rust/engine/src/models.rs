@@ -44,6 +44,7 @@ pub struct StatusChannel {
     pub title: String,
     pub description: Option<String>,
     pub favicon_url: Option<String>,
+    pub ytdlp_command: Option<String>,
     pub options: Vec<StatusFilterOption>,
 }
 

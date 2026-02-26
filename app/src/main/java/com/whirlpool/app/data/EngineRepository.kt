@@ -85,7 +85,8 @@ class EngineRepository(private val context: Context) {
         )
     }
 
-    fun resolve(pageUrl: String): PlaybackResolution = ytDlpResolver.resolve(pageUrl)
+    fun resolve(pageUrl: String, ytdlpCommand: String? = null): PlaybackResolution =
+        ytDlpResolver.resolve(pageUrl, ytdlpCommand)
 
     fun favorites(): List<FavoriteItem> = activeEngine().listFavorites()
 
@@ -404,16 +405,20 @@ private class YtDlpResolver(private val context: Context) {
 
     fun state(): String = lastState
 
-    fun resolve(pageUrl: String): PlaybackResolution {
+    fun resolve(pageUrl: String, ytdlpCommand: String? = null): PlaybackResolution {
         ensurePythonStarted()
 
+        val normalizedCommand = ytdlpCommand
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
         return try {
             val module = Python.getInstance().getModule("ytdlp_bridge")
-            val payload = module.callAttr("extract", pageUrl).toString()
+            val payload = module.callAttr("extract", pageUrl, normalizedCommand).toString()
             val resolved = parseResolutionPayload(payload, pageUrl)
 
             lastState = buildString {
                 append("yt-dlp resolve ok")
+                normalizedCommand?.let { append(" custom_args=true") }
                 resolved.extractor?.let { append(" extractor=$it") }
                 resolved.formatId?.let { append(" format=$it") }
                 resolved.ext?.let { append(" ext=$it") }

@@ -211,6 +211,14 @@ fn map_status_channel(channel: ApiStatusChannel) -> StatusChannel {
             Some(trimmed.to_string())
         }
     });
+    let ytdlp_command = channel.ytdlp_command.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
     let options = channel
         .options
         .into_iter()
@@ -238,6 +246,7 @@ fn map_status_channel(channel: ApiStatusChannel) -> StatusChannel {
         title,
         description,
         favicon_url,
+        ytdlp_command,
         options,
     }
 }
@@ -426,6 +435,7 @@ mod tests {
             "name": "Catflix",
             "description": " All cats, all the time. ",
             "favicon": " https://cdn.example.com/catflix.png ",
+            "ytdlpCommand": " --format best[ext=mp4] ",
             "options": [{
                 "id": "tags",
                 "title": "Tags",
@@ -445,6 +455,7 @@ mod tests {
             mapped.favicon_url.as_deref(),
             Some("https://cdn.example.com/catflix.png")
         );
+        assert_eq!(mapped.ytdlp_command.as_deref(), Some("--format best[ext=mp4]"));
         assert_eq!(mapped.options.len(), 1);
         assert!(mapped.options[0].multi_select);
     }

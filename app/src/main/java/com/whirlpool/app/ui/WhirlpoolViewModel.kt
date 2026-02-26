@@ -317,10 +317,22 @@ class WhirlpoolViewModel(
     fun playVideo(video: VideoItem) {
         log("Playback requested for: ${video.title}")
         log("yt-dlp state: ${repository.ytDlpState()}")
+        val selectedChannel = mutableState.value.channelDetails.firstOrNull { channel ->
+            channel.id == mutableState.value.activeChannel
+        }
+        val channelYtdlpCommand = selectedChannel
+            ?.ytdlpCommand
+            ?.takeIf { command -> command.isNotBlank() }
+        channelYtdlpCommand?.let { command ->
+            log("Applying channel yt-dlp args: $command")
+        }
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val resolved = repository.resolve(video.pageUrl)
+                    val resolved = repository.resolve(
+                        pageUrl = video.pageUrl,
+                        ytdlpCommand = channelYtdlpCommand,
+                    )
                     Pair(
                         mutableState.value.copy(
                             selectedVideo = video,
@@ -768,6 +780,7 @@ class WhirlpoolViewModel(
                 title = channelId,
                 description = null,
                 faviconUrl = null,
+                ytdlpCommand = null,
                 options = emptyList(),
             )
         }
