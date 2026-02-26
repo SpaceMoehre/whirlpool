@@ -1,5 +1,6 @@
 package com.whirlpool.app.ui
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -47,6 +48,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -69,7 +71,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +82,9 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.whirlpool.app.R
@@ -209,16 +216,26 @@ fun WhirlpoolScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val feedListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val configuration = LocalConfiguration.current
+    val isLandscapeLayout = configuration.screenWidthDp > configuration.screenHeightDp
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val headerOverlayHeight = statusBarTop + HEADER_BAR_HEIGHT
     var showFilters by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
 
     if (state.streamUrl != null) {
+        val playerVideo = state.selectedVideo
         PlayerMode(
             title = state.selectedVideo?.title ?: "Now Playing",
             streamUrl = state.streamUrl,
             requestHeaders = state.streamHeaders,
+            dominantHand = state.settings.dominantHand,
+            isFavorite = playerVideo?.let { video ->
+                state.favorites.any { favorite -> favorite.id == video.id }
+            } ?: false,
+            onFavoriteToggle = {
+                playerVideo?.let(viewModel::toggleFavorite)
+            },
             onPlaybackError = viewModel::onPlayerError,
             onPlaybackEvent = viewModel::onPlayerEvent,
             onClose = viewModel::dismissPlayer,
@@ -342,15 +359,45 @@ fun WhirlpoolScreen(
                         }
                     }
 
-                    items(state.videos, key = { it.id }) { video ->
-                        val isFavorite = state.favorites.any { it.id == video.id }
-                        MainVideoCard(
-                            video = video,
-                            isFavorite = isFavorite,
-                            showDetails = state.settings.videoRowDetails,
-                            onPlay = { viewModel.playVideo(video) },
-                            onFavorite = { viewModel.toggleFavorite(video) },
-                        )
+                    if (isLandscapeLayout) {
+                        val videoRows = state.videos.chunked(2)
+                        items(videoRows, key = { row -> row.joinToString(separator = "|") { it.id } }) { row ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                row.forEach { video ->
+                                    val isFavorite = state.favorites.any { it.id == video.id }
+                                    MainVideoCard(
+                                        video = video,
+                                        isFavorite = isFavorite,
+                                        showDetails = state.settings.videoRowDetails,
+                                        onPlay = { viewModel.playVideo(video) },
+                                        onFavorite = { viewModel.toggleFavorite(video) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (row.size == 1) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    } else {
+                        items(state.videos, key = { it.id }) { video ->
+                            val isFavorite = state.favorites.any { it.id == video.id }
+                            MainVideoCard(
+                                video = video,
+                                isFavorite = isFavorite,
+                                showDetails = state.settings.videoRowDetails,
+                                onPlay = { viewModel.playVideo(video) },
+                                onFavorite = { viewModel.toggleFavorite(video) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                            )
+                        }
                     }
 
                     item {
@@ -724,11 +771,10 @@ private fun MainVideoCard(
     showDetails: Boolean,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
+        modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .hapticClickable(onClick = onPlay)
@@ -1417,12 +1463,16 @@ private fun PlayerMode(
     title: String,
     streamUrl: String?,
     requestHeaders: Map<String, String>,
+    dominantHand: String,
+    isFavorite: Boolean,
+    onFavoriteToggle: () -> Unit,
     onPlaybackError: (String) -> Unit,
     onPlaybackEvent: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     BackHandler(onBack = onClose)
     val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
     var controls by remember { mutableStateOf<VideoPlayerControls?>(null) }
     var durationMs by remember { mutableStateOf(0L) }
     var positionMs by remember { mutableStateOf(0L) }
@@ -1431,6 +1481,23 @@ private fun PlayerMode(
     var scrubPositionMs by remember { mutableStateOf(0L) }
     var hudVisible by remember { mutableStateOf(true) }
     var hudTimerToken by remember { mutableStateOf(0) }
+
+    DisposableEffect(view) {
+        val window = (view.context as? Activity)?.window
+        if (window == null) {
+            onDispose { }
+        } else {
+            val insetsController = WindowCompat.getInsetsController(window, view)
+            val previousBehavior = insetsController.systemBarsBehavior
+            insetsController.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(WindowInsetsCompat.Type.statusBars())
+            onDispose {
+                insetsController.show(WindowInsetsCompat.Type.statusBars())
+                insetsController.systemBarsBehavior = previousBehavior
+            }
+        }
+    }
 
     val keepHudVisible = {
         hudVisible = true
@@ -1457,6 +1524,8 @@ private fun PlayerMode(
         delay(5_000L)
         hudVisible = false
     }
+
+    val favoriteOnLeft = dominantHand.equals("Righty", ignoreCase = true)
 
     Box(
         modifier = Modifier
@@ -1515,16 +1584,7 @@ private fun PlayerMode(
                         .weight(1f)
                         .padding(horizontal = 8.dp),
                 )
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_whirlpool_favorite_border),
-                    contentDescription = "Favorite",
-                    tint = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier
-                        .size(20.dp)
-                        .hapticClickable {
-                            keepHudVisible()
-                        },
-                )
+                Spacer(modifier = Modifier.size(24.dp))
             }
 
             Row(
@@ -1589,6 +1649,22 @@ private fun PlayerMode(
                     .fillMaxWidth()
                     .padding(16.dp),
             ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp),
+                ) {
+                    FavoriteHeartButton(
+                        isFavorite = isFavorite,
+                        onToggle = {
+                            keepHudVisible()
+                            onFavoriteToggle()
+                        },
+                        modifier = Modifier.align(
+                            if (favoriteOnLeft) Alignment.CenterStart else Alignment.CenterEnd,
+                        ),
+                    )
+                }
                 Slider(
                     value = progress,
                     onValueChange = { newProgress ->

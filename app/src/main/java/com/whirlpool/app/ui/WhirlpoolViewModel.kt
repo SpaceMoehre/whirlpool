@@ -760,7 +760,10 @@ class WhirlpoolViewModel(
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    repository.setSetting(key, value)
+                    val saved = repository.setSetting(key, value)
+                    if (!saved) {
+                        throw IOException("Unable to save setting: $key")
+                    }
                 }
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
@@ -953,38 +956,73 @@ class WhirlpoolViewModel(
     }
 }
 
+private fun normalizePreferenceToken(value: String): String {
+    return value.trim().trim('"')
+}
+
+private fun parsePreferenceBoolean(value: String): Boolean? {
+    return normalizePreferenceToken(value).toBooleanStrictOrNull()
+}
+
+private fun normalizeDominantHand(value: String): String {
+    val normalized = normalizePreferenceToken(value).lowercase()
+    return when (normalized) {
+        "left", "lefty" -> "Lefty"
+        else -> "Righty"
+    }
+}
+
+private fun normalizeThemeSetting(value: String): String {
+    return when (normalizePreferenceToken(value).lowercase()) {
+        "light" -> "Light"
+        else -> "Dark"
+    }
+}
+
+private fun normalizeSkipDurationSetting(value: String): String {
+    return when (normalizePreferenceToken(value).lowercase()) {
+        "automatic" -> "Automatic"
+        "5s" -> "5s"
+        "10s" -> "10s"
+        "15s" -> "15s"
+        "30s" -> "30s"
+        else -> "Automatic"
+    }
+}
+
 internal fun applySetting(settings: AppSettings, key: String, value: String): AppSettings {
+    val normalized = normalizePreferenceToken(value)
     return when (key) {
-        SettingKeys.DOMINANT_HAND -> settings.copy(dominantHand = value)
-        SettingKeys.ENABLE_HAPTICS -> settings.copy(enableHaptics = value.toBooleanStrictOrNull() ?: settings.enableHaptics)
-        SettingKeys.DETAILED_ALERTS -> settings.copy(detailedAlerts = value.toBooleanStrictOrNull() ?: settings.detailedAlerts)
-        SettingKeys.SHOW_EXTRACTION_TOAST -> settings.copy(showExtractionToast = value.toBooleanStrictOrNull() ?: settings.showExtractionToast)
-        SettingKeys.AUTO_PREVIEW -> settings.copy(autoPreview = value.toBooleanStrictOrNull() ?: settings.autoPreview)
-        SettingKeys.STATS_AND_ACHIEVEMENTS -> settings.copy(statsAndAchievements = value.toBooleanStrictOrNull() ?: settings.statsAndAchievements)
-        SettingKeys.CRASH_RECOVERY -> settings.copy(crashRecovery = value.toBooleanStrictOrNull() ?: settings.crashRecovery)
-        SettingKeys.CATEGORIES_SECTION -> settings.copy(categoriesSection = value.toBooleanStrictOrNull() ?: settings.categoriesSection)
-        SettingKeys.FAVORITES_SECTION -> settings.copy(favoritesSection = value.toBooleanStrictOrNull() ?: settings.favoritesSection)
-        SettingKeys.VIEWING_HISTORY -> settings.copy(viewingHistory = value.toBooleanStrictOrNull() ?: settings.viewingHistory)
-        SettingKeys.SEARCH_HISTORY -> settings.copy(searchHistory = value.toBooleanStrictOrNull() ?: settings.searchHistory)
-        SettingKeys.VIDEO_ROW_DETAILS -> settings.copy(videoRowDetails = value.toBooleanStrictOrNull() ?: settings.videoRowDetails)
-        SettingKeys.THEME -> settings.copy(theme = value)
-        SettingKeys.PALETTE -> settings.copy(palette = value)
+        SettingKeys.DOMINANT_HAND -> settings.copy(dominantHand = normalizeDominantHand(value))
+        SettingKeys.ENABLE_HAPTICS -> settings.copy(enableHaptics = parsePreferenceBoolean(value) ?: settings.enableHaptics)
+        SettingKeys.DETAILED_ALERTS -> settings.copy(detailedAlerts = parsePreferenceBoolean(value) ?: settings.detailedAlerts)
+        SettingKeys.SHOW_EXTRACTION_TOAST -> settings.copy(showExtractionToast = parsePreferenceBoolean(value) ?: settings.showExtractionToast)
+        SettingKeys.AUTO_PREVIEW -> settings.copy(autoPreview = parsePreferenceBoolean(value) ?: settings.autoPreview)
+        SettingKeys.STATS_AND_ACHIEVEMENTS -> settings.copy(statsAndAchievements = parsePreferenceBoolean(value) ?: settings.statsAndAchievements)
+        SettingKeys.CRASH_RECOVERY -> settings.copy(crashRecovery = parsePreferenceBoolean(value) ?: settings.crashRecovery)
+        SettingKeys.CATEGORIES_SECTION -> settings.copy(categoriesSection = parsePreferenceBoolean(value) ?: settings.categoriesSection)
+        SettingKeys.FAVORITES_SECTION -> settings.copy(favoritesSection = parsePreferenceBoolean(value) ?: settings.favoritesSection)
+        SettingKeys.VIEWING_HISTORY -> settings.copy(viewingHistory = parsePreferenceBoolean(value) ?: settings.viewingHistory)
+        SettingKeys.SEARCH_HISTORY -> settings.copy(searchHistory = parsePreferenceBoolean(value) ?: settings.searchHistory)
+        SettingKeys.VIDEO_ROW_DETAILS -> settings.copy(videoRowDetails = parsePreferenceBoolean(value) ?: settings.videoRowDetails)
+        SettingKeys.THEME -> settings.copy(theme = normalizeThemeSetting(value))
+        SettingKeys.PALETTE -> settings.copy(palette = normalized)
 
-        SettingKeys.PLAYBACK_PREFERRED_RESOLUTION -> settings.copy(preferredResolution = value)
-        SettingKeys.PLAYBACK_PREFERRED_FORMAT -> settings.copy(preferredFormat = value)
-        SettingKeys.PLAYBACK_LOOP -> settings.copy(loopPlayback = value.toBooleanStrictOrNull() ?: settings.loopPlayback)
-        SettingKeys.PLAYBACK_PIP -> settings.copy(pictureInPicture = value.toBooleanStrictOrNull() ?: settings.pictureInPicture)
-        SettingKeys.PLAYBACK_SYSTEM_PLAYER -> settings.copy(useSystemPlayer = value.toBooleanStrictOrNull() ?: settings.useSystemPlayer)
-        SettingKeys.PLAYBACK_SKIP_DURATION -> settings.copy(skipDuration = value)
-        SettingKeys.PLAYBACK_AUDIO_OUTPUT_NOTIFICATION -> settings.copy(audioOutputNotification = value.toBooleanStrictOrNull() ?: settings.audioOutputNotification)
-        SettingKeys.PLAYBACK_BLOCK_AUDIO_OUTPUT_CHANGES -> settings.copy(blockAudioOutputChanges = value.toBooleanStrictOrNull() ?: settings.blockAudioOutputChanges)
-        SettingKeys.PLAYBACK_AUDIO_NORMALIZATION -> settings.copy(audioNormalization = value.toBooleanStrictOrNull() ?: settings.audioNormalization)
+        SettingKeys.PLAYBACK_PREFERRED_RESOLUTION -> settings.copy(preferredResolution = normalized)
+        SettingKeys.PLAYBACK_PREFERRED_FORMAT -> settings.copy(preferredFormat = normalized)
+        SettingKeys.PLAYBACK_LOOP -> settings.copy(loopPlayback = parsePreferenceBoolean(value) ?: settings.loopPlayback)
+        SettingKeys.PLAYBACK_PIP -> settings.copy(pictureInPicture = parsePreferenceBoolean(value) ?: settings.pictureInPicture)
+        SettingKeys.PLAYBACK_SYSTEM_PLAYER -> settings.copy(useSystemPlayer = parsePreferenceBoolean(value) ?: settings.useSystemPlayer)
+        SettingKeys.PLAYBACK_SKIP_DURATION -> settings.copy(skipDuration = normalizeSkipDurationSetting(value))
+        SettingKeys.PLAYBACK_AUDIO_OUTPUT_NOTIFICATION -> settings.copy(audioOutputNotification = parsePreferenceBoolean(value) ?: settings.audioOutputNotification)
+        SettingKeys.PLAYBACK_BLOCK_AUDIO_OUTPUT_CHANGES -> settings.copy(blockAudioOutputChanges = parsePreferenceBoolean(value) ?: settings.blockAudioOutputChanges)
+        SettingKeys.PLAYBACK_AUDIO_NORMALIZATION -> settings.copy(audioNormalization = parsePreferenceBoolean(value) ?: settings.audioNormalization)
 
-        SettingKeys.PRIVACY_SHOW_LOCK_SCREEN -> settings.copy(showLockScreen = value.toBooleanStrictOrNull() ?: settings.showLockScreen)
-        SettingKeys.PRIVACY_UNLOCK_FACE_ID -> settings.copy(unlockWithFaceId = value.toBooleanStrictOrNull() ?: settings.unlockWithFaceId)
-        SettingKeys.PRIVACY_BLUR_SCREEN_CAPTURE -> settings.copy(blurOnScreenCapture = value.toBooleanStrictOrNull() ?: settings.blurOnScreenCapture)
-        SettingKeys.PRIVACY_ENABLE_ANALYTICS -> settings.copy(enableAnalytics = value.toBooleanStrictOrNull() ?: settings.enableAnalytics)
-        SettingKeys.PRIVACY_ENABLE_CRASH_REPORTING -> settings.copy(enableCrashReporting = value.toBooleanStrictOrNull() ?: settings.enableCrashReporting)
+        SettingKeys.PRIVACY_SHOW_LOCK_SCREEN -> settings.copy(showLockScreen = parsePreferenceBoolean(value) ?: settings.showLockScreen)
+        SettingKeys.PRIVACY_UNLOCK_FACE_ID -> settings.copy(unlockWithFaceId = parsePreferenceBoolean(value) ?: settings.unlockWithFaceId)
+        SettingKeys.PRIVACY_BLUR_SCREEN_CAPTURE -> settings.copy(blurOnScreenCapture = parsePreferenceBoolean(value) ?: settings.blurOnScreenCapture)
+        SettingKeys.PRIVACY_ENABLE_ANALYTICS -> settings.copy(enableAnalytics = parsePreferenceBoolean(value) ?: settings.enableAnalytics)
+        SettingKeys.PRIVACY_ENABLE_CRASH_REPORTING -> settings.copy(enableCrashReporting = parsePreferenceBoolean(value) ?: settings.enableCrashReporting)
 
         SettingKeys.FOLLOWING_TAGS -> settings.copy(followedTags = decodeStringList(value))
         SettingKeys.FOLLOWING_UPLOADERS -> settings.copy(followedUploaders = decodeStringList(value))
