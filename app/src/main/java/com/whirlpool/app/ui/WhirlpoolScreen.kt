@@ -177,27 +177,31 @@ fun WhirlpoolScreen(
                     }
 
                     item {
-                        SectionTitle("Categories")
-                        CategoriesRow(
-                            categories = state.categories,
-                            onCategoryClick = { category ->
-                                viewModel.onQueryChange(category)
-                                viewModel.search()
-                            },
-                        )
+                        if (state.settings.categoriesSection) {
+                            SectionTitle("Categories")
+                            CategoriesRow(
+                                categories = state.categories,
+                                onCategoryClick = { category ->
+                                    viewModel.onQueryChange(category)
+                                    viewModel.search()
+                                },
+                            )
+                        }
                     }
 
                     item {
-                        SectionTitle("Favorites")
-                        if (state.favorites.isNotEmpty()) {
-                            VideosRow(
-                                videos = state.favorites,
-                                onPlay = viewModel::playVideo,
-                                onFavoriteToggle = viewModel::toggleFavorite,
-                                favorites = state.favorites,
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.height(4.dp))
+                        if (state.settings.favoritesSection) {
+                            SectionTitle("Favorites")
+                            if (state.favorites.isNotEmpty()) {
+                                VideosRow(
+                                    videos = state.favorites,
+                                    onPlay = viewModel::playVideo,
+                                    onFavoriteToggle = viewModel::toggleFavorite,
+                                    favorites = state.favorites,
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.height(4.dp))
+                            }
                         }
                     }
 
@@ -226,6 +230,7 @@ fun WhirlpoolScreen(
                         MainVideoCard(
                             video = video,
                             isFavorite = isFavorite,
+                            showDetails = state.settings.videoRowDetails,
                             onPlay = { viewModel.playVideo(video) },
                             onFavorite = { viewModel.toggleFavorite(video) },
                         )
@@ -248,7 +253,10 @@ fun WhirlpoolScreen(
             ) {
                 FiltersSheet(
                     darkModeEnabled = darkModeEnabled,
-                    serverHost = "getfigleaf.com",
+                    serverHost = state.activeServerBaseUrl
+                        .substringAfter("://")
+                        .substringBefore("/")
+                        .ifBlank { "No source" },
                     channels = state.channelDetails,
                     activeChannelId = state.activeChannel,
                     selectedFilters = state.selectedFilters,
@@ -269,11 +277,31 @@ fun WhirlpoolScreen(
                 containerColor = menuPalette(darkModeEnabled).sheet,
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             ) {
-                SettingsSheet(
+                SettingsRootSheet(
                     darkModeEnabled = darkModeEnabled,
-                    onDarkModeToggle = onDarkModeToggle,
+                    settings = state.settings,
+                    sources = state.sourceServers,
                     logs = state.logs,
-                    onClearLogs = viewModel::clearLogs,
+                    onBooleanSettingChange = viewModel::updateBooleanSetting,
+                    onTextSettingChange = viewModel::updateTextSetting,
+                    onThemeSelected = { theme ->
+                        viewModel.updateTextSetting(SettingKeys.THEME, theme)
+                        onDarkModeToggle(theme == "Dark")
+                    },
+                    onAddSource = viewModel::addSource,
+                    onRemoveSource = viewModel::removeSource,
+                    onActivateSource = viewModel::activateSource,
+                    onAddTag = viewModel::addFollowingTag,
+                    onRemoveTag = viewModel::removeFollowingTag,
+                    onAddUploader = viewModel::addFollowingUploader,
+                    onRemoveUploader = viewModel::removeFollowingUploader,
+                    onClearCache = viewModel::clearCacheData,
+                    onExport = viewModel::exportDatabase,
+                    onImport = viewModel::importDatabase,
+                    onClearWatchHistory = viewModel::clearWatchHistory,
+                    onClearFavorites = viewModel::clearAllFavorites,
+                    onClearAchievements = viewModel::clearAchievements,
+                    onResetAllData = viewModel::resetAllData,
                     onClose = { showSettings = false },
                 )
             }
@@ -472,6 +500,7 @@ private fun VideoCard(
 private fun MainVideoCard(
     video: VideoItem,
     isFavorite: Boolean,
+    showDetails: Boolean,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
 ) {
@@ -520,13 +549,15 @@ private fun MainVideoCard(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
-            Text(
-                text = "${video.authorName ?: "Unknown"}  ·  ${video.viewCount ?: 0u} views",
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (showDetails) {
+                Text(
+                    text = "${video.authorName ?: "Unknown"}  ·  ${video.viewCount ?: 0u} views",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

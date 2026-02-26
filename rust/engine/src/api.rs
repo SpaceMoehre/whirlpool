@@ -40,6 +40,7 @@ impl ApiClient {
                 .api_version
                 .or(parsed.id)
                 .unwrap_or_else(|| "unknown".to_string()),
+            icon_url: parsed.icon_url,
             primary_color: parsed.primary_color.or(parsed.color),
             secondary_color: parsed.secondary_color,
             channels: channel_ids,
@@ -102,10 +103,8 @@ impl ApiClient {
             })?;
 
         let request_result = runtime.block_on(async {
-            let allow_invalid_tls = self.base_url.contains("getfigleaf.com");
             let client = reqwest::Client::builder()
                 .user_agent(DEFAULT_USER_AGENT)
-                .danger_accept_invalid_certs(allow_invalid_tls)
                 .build()?;
 
             let mut request = client.request(request_method, url);

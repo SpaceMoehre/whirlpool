@@ -7,6 +7,25 @@ import org.junit.Test
 
 class EngineRepositoryParsingTest {
     @Test
+    fun sourceUrlCandidates_defaultsToHttpsAndFallsBackToHttp() {
+        val candidates = sourceUrlCandidates("example.com")
+        assertEquals(listOf("https://example.com", "http://example.com"), candidates)
+    }
+
+    @Test
+    fun sourceUrlCandidates_keepsExplicitScheme() {
+        val candidates = sourceUrlCandidates("http://localhost:8080/")
+        assertEquals(listOf("http://localhost:8080"), candidates)
+    }
+
+    @Test
+    fun normalizeConfiguredBaseUrl_trimsAndDefaultsScheme() {
+        assertEquals("", normalizeConfiguredBaseUrl("  "))
+        assertEquals("https://example.com/path", normalizeConfiguredBaseUrl("example.com/path/"))
+        assertEquals("http://example.com", normalizeConfiguredBaseUrl("http://example.com/"))
+    }
+
+    @Test
     fun parseResolutionPayload_readsStreamUrlAndHeaders() {
         val payload = """
             {

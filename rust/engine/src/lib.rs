@@ -12,8 +12,8 @@ use api::ApiClient;
 use db::Database;
 use errors::EngineError;
 use models::{
-    BridgeHealth, EngineConfig, FavoriteItem, FilterSelection, ResolvedVideo, StatusSummary,
-    VideoItem, YtDlpUpdateInfo,
+    BridgeHealth, EngineConfig, FavoriteItem, FilterSelection, ResolvedVideo, SourceServer,
+    StatusSummary, UserPreference, VideoItem, YtDlpUpdateInfo,
 };
 use updater::{check_yt_dlp_update, default_release_api};
 use ytdlp::YtDlpClient;
@@ -56,6 +56,18 @@ impl Engine {
         let status = self.api.fetch_status()?;
         self.db.sync_categories(&status.sources)?;
         Ok(status)
+    }
+
+    pub fn probe_status(&self, api_base_url: String) -> Result<StatusSummary, EngineError> {
+        let normalized = api_base_url.trim().trim_end_matches('/').to_string();
+        if normalized.is_empty() {
+            return Err(EngineError::InvalidConfig {
+                detail: "api_base_url cannot be empty".to_string(),
+            });
+        }
+        let mut config = self.config.clone();
+        config.api_base_url = normalized;
+        ApiClient::new(&config).fetch_status()
     }
 
     pub fn discover_videos(
@@ -112,6 +124,60 @@ impl Engine {
 
     pub fn import_database(&self, import_path: String) -> Result<bool, EngineError> {
         self.db.import_from(&import_path)
+    }
+
+    pub fn set_user_preference(&self, key: String, value: String) -> Result<bool, EngineError> {
+        self.db.set_meta(&key, &value)?;
+        Ok(true)
+    }
+
+    pub fn get_user_preference(&self, key: String) -> Result<Option<String>, EngineError> {
+        self.db.get_meta(&key)
+    }
+
+    pub fn list_user_preferences(&self, prefix: String) -> Result<Vec<UserPreference>, EngineError> {
+        let values = self.db.list_meta_with_prefix(&prefix)?;
+        Ok(values
+            .into_iter()
+            .map(|(id, preference_value)| UserPreference {
+                id,
+                preference_value,
+            })
+            .collect())
+    }
+
+    pub fn upsert_source_server(&self, server: SourceServer) -> Result<bool, EngineError> {
+        self.db.upsert_server(&server)?;
+        Ok(true)
+    }
+
+    pub fn remove_source_server(&self, base_url: String) -> Result<bool, EngineError> {
+        self.db.remove_server(&base_url)
+    }
+
+    pub fn list_source_servers(&self) -> Result<Vec<SourceServer>, EngineError> {
+        self.db.list_servers()
+    }
+
+    pub fn clear_cache_data(&self) -> Result<u64, EngineError> {
+        self.db.clear_cache_data()
+    }
+
+    pub fn clear_watch_history(&self) -> Result<u64, EngineError> {
+        self.db.clear_watch_history()
+    }
+
+    pub fn clear_all_favorites(&self) -> Result<u64, EngineError> {
+        self.db.clear_favorites()
+    }
+
+    pub fn clear_achievements(&self) -> Result<u64, EngineError> {
+        self.db.clear_achievements()
+    }
+
+    pub fn reset_all_data(&self) -> Result<bool, EngineError> {
+        self.db.reset_all_data()?;
+        Ok(true)
     }
 
     pub fn check_yt_dlp_update(&self) -> Result<YtDlpUpdateInfo, EngineError> {
@@ -196,7 +262,8 @@ pub use errors::EngineError as UniFfiEngineError;
 pub use models::{
     BridgeHealth as UniFfiBridgeHealth, EngineConfig as UniFfiEngineConfig,
     FavoriteItem as UniFfiFavoriteItem, FilterSelection as UniFfiFilterSelection,
-    ResolvedVideo as UniFfiResolvedVideo, StatusSummary as UniFfiStatusSummary,
+    ResolvedVideo as UniFfiResolvedVideo, SourceServer as UniFfiSourceServer,
+    StatusSummary as UniFfiStatusSummary, UserPreference as UniFfiUserPreference,
     VideoItem as UniFfiVideoItem, YtDlpUpdateInfo as UniFfiYtDlpUpdateInfo,
 };
 

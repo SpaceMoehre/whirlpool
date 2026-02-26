@@ -5,7 +5,7 @@ use chrono::{DateTime, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::errors::EngineError;
-use crate::models::{FavoriteItem, ResolvedVideo, VideoItem};
+use crate::models::{FavoriteItem, ResolvedVideo, SourceServer, VideoItem};
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -350,6 +350,30 @@ impl Database {
         Ok(())
     }
 
+    pub fn list_meta_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>, EngineError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT "id", COALESCE("preferenceValue", '')
+            FROM "user_preferences"
+            WHERE "id" LIKE ?1
+            ORDER BY "id" ASC
+            "#,
+        )?;
+        let pattern = format!("{prefix}%");
+        let rows = stmt.query_map(params![pattern], |row| {
+            let key: String = row.get(0)?;
+            let value: String = row.get(1)?;
+            Ok((key, value))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn get_meta(&self, key: &str) -> Result<Option<String>, EngineError> {
         let conn = self.conn()?;
         let val = conn
@@ -360,6 +384,136 @@ impl Database {
             )
             .optional()?;
         Ok(val.flatten())
+    }
+
+    pub fn upsert_server(&self, server: &SourceServer) -> Result<(), EngineError> {
+        let base_url = server.base_url.trim();
+        if base_url.is_empty() {
+            return Ok(());
+        }
+
+        let payload = serde_json::to_string(server)?;
+        let conn = self.conn()?;
+        conn.execute(
+            r#"
+            INSERT INTO "server_preferences" ("id", "preferenceValue")
+            VALUES (?1, ?2)
+            ON CONFLICT("id") DO UPDATE SET "preferenceValue" = excluded."preferenceValue"
+            "#,
+            params![base_url, payload],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_server(&self, base_url: &str) -> Result<bool, EngineError> {
+        let conn = self.conn()?;
+        let removed = conn.execute(
+            r#"DELETE FROM "server_preferences" WHERE "id" = ?1"#,
+            params![base_url.trim()],
+        )?;
+        Ok(removed > 0)
+    }
+
+    pub fn list_servers(&self) -> Result<Vec<SourceServer>, EngineError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT "id", COALESCE("preferenceValue", '')
+            FROM "server_preferences"
+            ORDER BY "id" ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let payload: String = row.get(1)?;
+            Ok((id, payload))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, payload) = row?;
+            let parsed = serde_json::from_str::<SourceServer>(&payload).ok();
+            let fallback_title = id
+                .trim()
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .to_string();
+            out.push(parsed.unwrap_or(SourceServer {
+                base_url: id,
+                title: if fallback_title.is_empty() {
+                    "Source".to_string()
+                } else {
+                    fallback_title
+                },
+                color: None,
+                icon_url: None,
+            }));
+        }
+        Ok(out)
+    }
+
+    pub fn clear_cache_data(&self) -> Result<u64, EngineError> {
+        let conn = self.conn()?;
+        let rows = conn.execute(
+            r#"
+            DELETE FROM "video_details"
+            WHERE "favoriteDate" IS NULL OR TRIM("favoriteDate") = ''
+            "#,
+            [],
+        )?;
+        Ok(rows as u64)
+    }
+
+    pub fn clear_watch_history(&self) -> Result<u64, EngineError> {
+        let conn = self.conn()?;
+        let rows = conn.execute(
+            r#"
+            UPDATE "video_details"
+            SET "lastWatchDate" = NULL
+            WHERE "lastWatchDate" IS NOT NULL AND TRIM("lastWatchDate") <> ''
+            "#,
+            [],
+        )?;
+        Ok(rows as u64)
+    }
+
+    pub fn clear_favorites(&self) -> Result<u64, EngineError> {
+        let conn = self.conn()?;
+        let rows = conn.execute(
+            r#"
+            UPDATE "video_details"
+            SET "favoriteDate" = NULL
+            WHERE "favoriteDate" IS NOT NULL AND TRIM("favoriteDate") <> ''
+            "#,
+            [],
+        )?;
+        Ok(rows as u64)
+    }
+
+    pub fn clear_achievements(&self) -> Result<u64, EngineError> {
+        let conn = self.conn()?;
+        let rows = conn.execute(
+            r#"
+            DELETE FROM "user_preferences"
+            WHERE "id" LIKE 'achievement.%'
+               OR "id" LIKE 'stats.%'
+               OR "id" LIKE 'badges.%'
+            "#,
+            [],
+        )?;
+        Ok(rows as u64)
+    }
+
+    pub fn reset_all_data(&self) -> Result<(), EngineError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(r#"DELETE FROM "video_details""#, [])?;
+        tx.execute(r#"DELETE FROM "searches""#, [])?;
+        tx.execute(r#"DELETE FROM "categories""#, [])?;
+        tx.execute(r#"DELETE FROM "user_preferences""#, [])?;
+        tx.execute(r#"DELETE FROM "server_preferences""#, [])?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn sync_categories(&self, categories: &[String]) -> Result<(), EngineError> {
@@ -918,5 +1072,76 @@ mod tests {
         let favorites = imported.list_favorites().expect("list favorites");
         assert_eq!(favorites.len(), 1);
         assert_eq!(favorites[0].video_id, "video-2");
+    }
+
+    #[test]
+    fn server_preferences_roundtrip() {
+        let tmp = tempdir().expect("tmpdir");
+        let db = Database::new(tmp.path().join("servers.sqlite"));
+        db.init().expect("db init");
+
+        db.upsert_server(&SourceServer {
+            base_url: "https://getfigleaf.com".to_string(),
+            title: "Fig Leaf".to_string(),
+            color: Some("#478003".to_string()),
+            icon_url: Some("https://cdn.example.com/figleaf.png".to_string()),
+        })
+        .expect("upsert server");
+        db.upsert_server(&SourceServer {
+            base_url: "https://example.com".to_string(),
+            title: "Example".to_string(),
+            color: None,
+            icon_url: None,
+        })
+        .expect("upsert second server");
+
+        let servers = db.list_servers().expect("list servers");
+        assert_eq!(servers.len(), 2);
+        assert!(servers.iter().any(|server| {
+            server.base_url == "https://getfigleaf.com"
+                && server.title == "Fig Leaf"
+                && server.color.as_deref() == Some("#478003")
+                && server.icon_url.as_deref() == Some("https://cdn.example.com/figleaf.png")
+        }));
+
+        let removed = db
+            .remove_server("https://example.com")
+            .expect("remove server");
+        assert!(removed);
+        assert_eq!(db.list_servers().expect("list servers").len(), 1);
+    }
+
+    #[test]
+    fn reset_all_data_clears_tables() {
+        let tmp = tempdir().expect("tmpdir");
+        let db = Database::new(tmp.path().join("reset.sqlite"));
+        db.init().expect("db init");
+
+        db.add_favorite(&sample_video("video-reset"))
+            .expect("add favorite");
+        db.set_meta("settings.theme", "dark").expect("set meta");
+        db.upsert_server(&SourceServer {
+            base_url: "https://getfigleaf.com".to_string(),
+            title: "Fig Leaf".to_string(),
+            color: None,
+            icon_url: None,
+        })
+        .expect("set server");
+
+        db.reset_all_data().expect("reset all");
+
+        let conn = Connection::open(db.path()).expect("open db");
+        let count_video_details: i64 = conn
+            .query_row(r#"SELECT COUNT(*) FROM "video_details""#, [], |row| row.get(0))
+            .expect("count video_details");
+        let count_meta: i64 = conn
+            .query_row(r#"SELECT COUNT(*) FROM "user_preferences""#, [], |row| row.get(0))
+            .expect("count user_preferences");
+        let count_servers: i64 = conn
+            .query_row(r#"SELECT COUNT(*) FROM "server_preferences""#, [], |row| row.get(0))
+            .expect("count server_preferences");
+        assert_eq!(count_video_details, 0);
+        assert_eq!(count_meta, 0);
+        assert_eq!(count_servers, 0);
     }
 }

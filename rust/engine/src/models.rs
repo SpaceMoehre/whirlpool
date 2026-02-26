@@ -14,6 +14,7 @@ pub struct EngineConfig {
 pub struct StatusSummary {
     pub name: String,
     pub api_version: String,
+    pub icon_url: Option<String>,
     pub primary_color: Option<String>,
     pub secondary_color: Option<String>,
     pub channels: Vec<String>,
@@ -21,6 +22,20 @@ pub struct StatusSummary {
     pub sources: Vec<String>,
     pub adblock_required: bool,
     pub source_releases_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct UserPreference {
+    pub id: String,
+    pub preference_value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct SourceServer {
+    pub base_url: String,
+    pub title: String,
+    pub color: Option<String>,
+    pub icon_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
