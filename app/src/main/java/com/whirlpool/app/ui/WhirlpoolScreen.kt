@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -57,15 +59,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.CompositingStrategy
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -77,14 +88,13 @@ import com.whirlpool.engine.StatusFilterOption
 import com.whirlpool.engine.VideoItem
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
-private val CategoryGradients = listOf(
-    listOf(Color(0xFF0A83E8), Color(0xFF32A9D4)),
-    listOf(Color(0xFF22C55E), Color(0xFF14B8A6)),
-    listOf(Color(0xFFF59E0B), Color(0xFFF43F5E)),
-    listOf(Color(0xFF8B5CF6), Color(0xFFEC4899)),
-)
 private const val FEED_NEXT_PAGE_PREFETCH_DISTANCE = 12
+private val HEADER_BAR_HEIGHT = 72.dp
+private val HEADER_BLUR_RADIUS = 24.dp
 
 private data class MenuPalette(
     val sheet: Color,
@@ -131,6 +141,64 @@ private fun Modifier.hapticClickable(
     }
 }
 
+private fun categoryVibrantGradient(word: String): List<Color> {
+    val normalized = word.trim().lowercase()
+    val primarySeed = stableWordSeed(normalized)
+    val accentSeed = stableWordSeed("$normalized#accent")
+
+    val hueA = positiveMod(primarySeed, 360).toFloat()
+    val hueB = (hueA + 36f + positiveMod(accentSeed ushr 7, 72).toFloat()) % 360f
+
+    val saturationA = 0.78f + positiveMod(primarySeed ushr 3, 18) / 100f
+    val saturationB = 0.74f + positiveMod(accentSeed ushr 5, 20) / 100f
+    val lightnessA = 0.34f + positiveMod(primarySeed ushr 11, 18) / 100f
+    val lightnessB = 0.30f + positiveMod(accentSeed ushr 13, 20) / 100f
+
+    return listOf(
+        hslToColor(hueA, saturationA, lightnessA),
+        hslToColor(hueB, saturationB, lightnessB),
+    )
+}
+
+private fun stableWordSeed(input: String): Long {
+    var hash = 1_125_899_906_842_597L
+    input.forEach { ch ->
+        hash = 31L * hash + ch.code.toLong()
+    }
+    return hash
+}
+
+private fun positiveMod(value: Long, mod: Int): Int {
+    val raw = value % mod
+    return if (raw < 0) (raw + mod).toInt() else raw.toInt()
+}
+
+private fun hslToColor(hue: Float, saturation: Float, lightness: Float): Color {
+    val h = ((hue % 360f) + 360f) % 360f
+    val s = saturation.coerceIn(0f, 1f)
+    val l = lightness.coerceIn(0f, 1f)
+
+    val chroma = (1f - abs(2f * l - 1f)) * s
+    val x = chroma * (1f - abs((h / 60f) % 2f - 1f))
+    val m = l - chroma / 2f
+
+    val (rPrime, gPrime, bPrime) = when {
+        h < 60f -> Triple(chroma, x, 0f)
+        h < 120f -> Triple(x, chroma, 0f)
+        h < 180f -> Triple(0f, chroma, x)
+        h < 240f -> Triple(0f, x, chroma)
+        h < 300f -> Triple(x, 0f, chroma)
+        else -> Triple(chroma, 0f, x)
+    }
+
+    return Color(
+        red = (rPrime + m).coerceIn(0f, 1f),
+        green = (gPrime + m).coerceIn(0f, 1f),
+        blue = (bPrime + m).coerceIn(0f, 1f),
+        alpha = 1f,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WhirlpoolScreen(
@@ -140,6 +208,9 @@ fun WhirlpoolScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val feedListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val headerOverlayHeight = statusBarTop + HEADER_BAR_HEIGHT
     var showFilters by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
 
@@ -193,7 +264,13 @@ fun WhirlpoolScreen(
             PullToRefreshBox(
                 isRefreshing = state.isLoading,
                 onRefresh = viewModel::search,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .topRegionBlur(
+                        blurHeight = headerOverlayHeight,
+                        blurRadius = HEADER_BLUR_RADIUS,
+                        overlayColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.18f),
+                    ),
             ) {
                 LazyColumn(
                     state = feedListState,
@@ -201,9 +278,10 @@ fun WhirlpoolScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     item {
-                        HeaderRow(
-                            onSettings = { showSettings = true },
-                            onFilters = { showFilters = true },
+                        Spacer(
+                            modifier = Modifier
+                                .statusBarsPadding()
+                                .height(48.dp),
                         )
                     }
 
@@ -280,6 +358,22 @@ fun WhirlpoolScreen(
                     }
                 }
             }
+
+            HeaderBackdrop(
+                modifier = Modifier.align(Alignment.TopCenter),
+                height = headerOverlayHeight,
+            )
+
+            HeaderRow(
+                modifier = Modifier.align(Alignment.TopCenter),
+                onSettings = { showSettings = true },
+                onFilters = { showFilters = true },
+                onTitleTap = {
+                    scope.launch {
+                        feedListState.scrollToItem(index = 0)
+                    }
+                },
+            )
         }
 
         if (showFilters) {
@@ -354,9 +448,90 @@ fun WhirlpoolScreen(
 }
 
 @Composable
-private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
+private fun HeaderBackdrop(
+    modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(height),
+    ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.42f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+    }
+}
+
+private fun Modifier.topRegionBlur(
+    blurHeight: androidx.compose.ui.unit.Dp,
+    blurRadius: androidx.compose.ui.unit.Dp,
+    overlayColor: Color,
+): Modifier = composed {
+    val blurLayer = rememberGraphicsLayer().apply {
+        compositingStrategy = CompositingStrategy.Offscreen
+    }
+
+    drawWithContent {
+        drawContent()
+
+        val clipHeight = blurHeight.toPx().coerceAtMost(size.height)
+        val radiusPx = blurRadius.toPx()
+        if (clipHeight <= 0f || radiusPx <= 0f) {
+            return@drawWithContent
+        }
+
+        blurLayer.renderEffect = BlurEffect(radiusX = radiusPx, radiusY = radiusPx)
+        blurLayer.record(
+            density = this,
+            layoutDirection = layoutDirection,
+            size = IntSize(
+                width = size.width.roundToInt().coerceAtLeast(1),
+                height = size.height.roundToInt().coerceAtLeast(1),
+            ),
+        ) {
+            this@drawWithContent.drawContent()
+        }
+
+        val canvas = drawContext.canvas
+        canvas.save()
+        canvas.clipRect(0f, 0f, size.width, clipHeight)
+        drawLayer(blurLayer)
+        canvas.restore()
+
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    overlayColor,
+                    Color.Transparent,
+                ),
+                endY = clipHeight,
+            ),
+            size = Size(size.width, clipHeight),
+        )
+    }
+}
+
+@Composable
+private fun HeaderRow(
+    modifier: Modifier = Modifier,
+    onSettings: () -> Unit,
+    onFilters: () -> Unit,
+    onTitleTap: () -> Unit,
+) {
     Box(
         modifier = Modifier
+            .then(modifier)
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -376,7 +551,9 @@ private fun HeaderRow(onSettings: () -> Unit, onFilters: () -> Unit) {
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .hapticClickable(onClick = onTitleTap),
         )
 
         Icon(
@@ -448,7 +625,7 @@ private fun CategoriesRow(
     ) {
         item { Spacer(modifier = Modifier.width(6.dp)) }
         items(categories) { title ->
-            val gradient = CategoryGradients[title.hashCode().absoluteValue % CategoryGradients.size]
+            val gradient = remember(title) { categoryVibrantGradient(title) }
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
@@ -1473,6 +1650,3 @@ private fun formatVideoDuration(durationSeconds: UInt?): String? {
         "%02d:%02d".format(minutes, remainingSeconds)
     }
 }
-
-private val Int.absoluteValue: Int
-    get() = if (this < 0) -this else this
