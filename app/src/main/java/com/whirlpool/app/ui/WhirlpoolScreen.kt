@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -50,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -74,6 +76,7 @@ import com.whirlpool.engine.StatusChannel
 import com.whirlpool.engine.StatusFilterOption
 import com.whirlpool.engine.VideoItem
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val CategoryGradients = listOf(
     listOf(Color(0xFF0A83E8), Color(0xFF32A9D4)),
@@ -81,6 +84,7 @@ private val CategoryGradients = listOf(
     listOf(Color(0xFFF59E0B), Color(0xFFF43F5E)),
     listOf(Color(0xFF8B5CF6), Color(0xFFEC4899)),
 )
+private const val FEED_NEXT_PAGE_PREFETCH_DISTANCE = 12
 
 private data class MenuPalette(
     val sheet: Color,
@@ -135,6 +139,7 @@ fun WhirlpoolScreen(
     onDarkModeToggle: (Boolean) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val feedListState = rememberLazyListState()
     var showFilters by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
 
@@ -150,6 +155,36 @@ fun WhirlpoolScreen(
         return
     }
 
+    LaunchedEffect(
+        feedListState,
+        state.videos.size,
+        state.hasMorePages,
+        state.isLoading,
+        state.isLoadingNextPage,
+    ) {
+        snapshotFlow {
+            val layoutInfo = feedListState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val prefetchStartIndex = (totalItems - FEED_NEXT_PAGE_PREFETCH_DISTANCE).coerceAtLeast(0)
+            val nearEnd = totalItems > 0 && lastVisibleIndex >= prefetchStartIndex
+            val hasScrolled = feedListState.firstVisibleItemIndex > 0 ||
+                feedListState.firstVisibleItemScrollOffset > 0
+            nearEnd && hasScrolled
+        }
+            .distinctUntilChanged()
+            .collect { shouldLoadNextPage ->
+                if (
+                    shouldLoadNextPage &&
+                    state.hasMorePages &&
+                    !state.isLoading &&
+                    !state.isLoadingNextPage
+                ) {
+                    viewModel.loadNextPage()
+                }
+            }
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -161,6 +196,7 @@ fun WhirlpoolScreen(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 LazyColumn(
+                    state = feedListState,
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
@@ -837,10 +873,6 @@ private fun FiltersSheet(
                     label = "Channel",
                     value = buildString {
                         append(activeChannel?.title ?: activeChannelId)
-                        // if (serverHost.isNotBlank()) {
-                        //     append(" · ")
-                        //     append(serverHost)
-                        // }
                     },
                     enabled = sortedChannels.isNotEmpty(),
                     onClick = { showChannelSelector = true },

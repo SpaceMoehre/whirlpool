@@ -103,6 +103,9 @@ data class WhirlpoolUiState(
     val availableChannels: List<ChannelMenuItem> = emptyList(),
     val activeChannel: String = "catflix",
     val selectedFilters: Map<String, Set<String>> = emptyMap(),
+    val currentPage: UInt = 1u,
+    val hasMorePages: Boolean = true,
+    val isLoadingNextPage: Boolean = false,
     val selectedVideo: VideoItem? = null,
     val streamUrl: String? = null,
     val streamHeaders: Map<String, String> = emptyMap(),
@@ -175,7 +178,7 @@ class WhirlpoolViewModel(
                     val discovered = repository.discover(
                         query = current.query,
                         page = 1u,
-                        limit = 10u,
+                        limit = FEED_PAGE_LIMIT,
                         channelId = nextChannelId,
                         filters = normalizedFilters,
                     )
@@ -199,6 +202,9 @@ class WhirlpoolViewModel(
                         availableChannels = availableChannels,
                         activeChannel = nextChannelId,
                         selectedFilters = normalizedFilters,
+                        currentPage = 1u,
+                        hasMorePages = videos.size >= FEED_PAGE_LIMIT.toInt(),
+                        isLoadingNextPage = false,
                         sourceServers = sources,
                         activeServerBaseUrl = activeBaseUrl,
                         actionText = null,
@@ -211,9 +217,58 @@ class WhirlpoolViewModel(
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
                     isLoading = false,
+                    isLoadingNextPage = false,
                     errorText = throwable.message ?: "Unable to load live feed from server.",
                 )
                 log("Feed load failed: ${throwable.message ?: "unknown error"}")
+            }
+        }
+    }
+
+    fun loadNextPage() {
+        val current = mutableState.value
+        if (current.isLoading || current.isLoadingNextPage || !current.hasMorePages) {
+            return
+        }
+
+        val nextPage = current.currentPage + 1u
+        mutableState.value = current.copy(isLoadingNextPage = true)
+
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.discover(
+                        query = current.query,
+                        page = nextPage,
+                        limit = FEED_PAGE_LIMIT,
+                        channelId = current.activeChannel,
+                        filters = current.selectedFilters,
+                    )
+                }
+            }.onSuccess { discovered ->
+                val latest = mutableState.value
+                if (!latest.isLoadingNextPage) {
+                    return@onSuccess
+                }
+
+                val existing = latest.videos
+                val appended = (existing + discovered).distinctBy { video -> video.id }
+                val hasMore = discovered.size >= FEED_PAGE_LIMIT.toInt()
+
+                mutableState.value = latest.copy(
+                    videos = appended,
+                    currentPage = if (discovered.isNotEmpty()) nextPage else latest.currentPage,
+                    hasMorePages = hasMore && discovered.isNotEmpty(),
+                    isLoadingNextPage = false,
+                )
+                if (discovered.isNotEmpty()) {
+                    log("Loaded page $nextPage (+${discovered.size} videos).")
+                }
+            }.onFailure { throwable ->
+                mutableState.value = mutableState.value.copy(
+                    isLoadingNextPage = false,
+                )
+                log("Load next page failed: ${throwable.message ?: "unknown error"}")
             }
         }
     }
@@ -879,6 +934,8 @@ class WhirlpoolViewModel(
     }
 
     companion object {
+        private val FEED_PAGE_LIMIT: UInt = 10u
+
         fun factory(context: Context): ViewModelProvider.Factory {
             val repository = EngineRepository(context)
             return object : ViewModelProvider.Factory {
