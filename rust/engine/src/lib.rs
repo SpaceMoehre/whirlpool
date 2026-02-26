@@ -110,6 +110,10 @@ impl Engine {
         self.db.list_favorites()
     }
 
+    pub fn list_favorite_videos(&self) -> Result<Vec<VideoItem>, EngineError> {
+        self.db.list_favorite_videos()
+    }
+
     pub fn add_favorite(&self, video: VideoItem) -> Result<FavoriteItem, EngineError> {
         self.db.add_favorite(&video)
     }

@@ -42,6 +42,8 @@ pub struct SourceServer {
 pub struct StatusChannel {
     pub id: String,
     pub title: String,
+    pub description: Option<String>,
+    pub favicon_url: Option<String>,
     pub options: Vec<StatusFilterOption>,
 }
 
@@ -49,6 +51,7 @@ pub struct StatusChannel {
 pub struct StatusFilterOption {
     pub id: String,
     pub title: String,
+    pub multi_select: bool,
     pub choices: Vec<StatusChoice>,
 }
 
@@ -169,6 +172,8 @@ pub struct ApiStatusChannel {
 pub struct ApiStatusChannelOption {
     pub id: String,
     pub title: Option<String>,
+    #[serde(rename = "multiSelect", default)]
+    pub multi_select: bool,
     #[serde(default)]
     pub options: Vec<ApiStatusChoice>,
 }

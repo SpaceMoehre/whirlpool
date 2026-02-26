@@ -50,15 +50,31 @@ class EngineRepository(private val context: Context) {
 
     fun status(): StatusSummary = activeSourceEngine().syncStatus()
 
+    fun statusForSource(baseUrl: String): StatusSummary {
+        val normalized = normalizeConfiguredBaseUrl(baseUrl)
+        require(normalized.isNotBlank()) { "baseUrl cannot be blank" }
+        return settingsEngine().probeStatus(normalized)
+    }
+
     fun discover(
         query: String,
         page: UInt = 1u,
         limit: UInt = 10u,
         channelId: String = "",
-        filters: Map<String, String> = emptyMap(),
+        filters: Map<String, Set<String>> = emptyMap(),
     ): List<VideoItem> {
-        val selections = filters.entries.map { entry ->
-            FilterSelection(optionId = entry.key, choiceId = entry.value)
+        val selections = filters.entries.flatMap { entry ->
+            val selectedIds = entry.value
+                .map { choiceId -> choiceId.trim() }
+                .filter { choiceId -> choiceId.isNotEmpty() }
+                .distinct()
+            if (selectedIds.isEmpty()) {
+                listOf(FilterSelection(optionId = entry.key, choiceId = ""))
+            } else {
+                selectedIds.map { choiceId ->
+                    FilterSelection(optionId = entry.key, choiceId = choiceId)
+                }
+            }
         }
         return activeSourceEngine().discoverVideosWithFilters(
             query = query,
@@ -72,6 +88,8 @@ class EngineRepository(private val context: Context) {
     fun resolve(pageUrl: String): PlaybackResolution = ytDlpResolver.resolve(pageUrl)
 
     fun favorites(): List<FavoriteItem> = activeEngine().listFavorites()
+
+    fun favoriteVideos(): List<VideoItem> = activeEngine().listFavoriteVideos()
 
     fun addFavorite(video: VideoItem): FavoriteItem = activeEngine().addFavorite(video)
 

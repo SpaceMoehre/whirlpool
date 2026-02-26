@@ -337,6 +337,67 @@ impl Database {
         Ok(out)
     }
 
+    pub fn list_favorite_videos(&self) -> Result<Vec<VideoItem>, EngineError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                "id",
+                COALESCE("title", ''),
+                COALESCE("url", ''),
+                "duration",
+                "thumb",
+                "network",
+                "uploader",
+                "views",
+                "rawData"
+            FROM "video_details"
+            WHERE "favoriteDate" IS NOT NULL
+              AND TRIM("favoriteDate") <> ''
+            ORDER BY "favoriteDate" DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let video_id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let page_url: String = row.get(2)?;
+            let raw_data: Option<String> = row.get(8)?;
+            let extractor = raw_data
+                .as_deref()
+                .and_then(|payload| serde_json::from_str::<VideoItem>(payload).ok())
+                .and_then(|video| video.extractor);
+
+            Ok(VideoItem {
+                id: video_id.clone(),
+                title: if title.trim().is_empty() {
+                    video_id.clone()
+                } else {
+                    title
+                },
+                page_url: non_empty_str(&page_url)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| fallback_url(&video_id)),
+                duration_seconds: row
+                    .get::<_, Option<i64>>(3)?
+                    .and_then(|seconds| u32::try_from(seconds).ok()),
+                image_url: row.get(4)?,
+                network: row.get(5)?,
+                author_name: row.get(6)?,
+                extractor,
+                view_count: row
+                    .get::<_, Option<i64>>(7)?
+                    .and_then(|views| u64::try_from(views).ok()),
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<(), EngineError> {
         let conn = self.conn()?;
         conn.execute(
@@ -950,9 +1011,15 @@ mod tests {
         assert_eq!(favorites.len(), 1);
         assert_eq!(favorites[0].video_id, "video-1");
 
+        let favorite_videos = db.list_favorite_videos().expect("list favorite videos");
+        assert_eq!(favorite_videos.len(), 1);
+        assert_eq!(favorite_videos[0].id, "video-1");
+        assert_eq!(favorite_videos[0].page_url, "https://example.com/v/1");
+
         let removed = db.remove_favorite("video-1").expect("remove favorite");
         assert!(removed);
         assert!(db.list_favorites().expect("list favorites").is_empty());
+        assert!(db.list_favorite_videos().expect("list favorite videos").is_empty());
     }
 
     #[test]

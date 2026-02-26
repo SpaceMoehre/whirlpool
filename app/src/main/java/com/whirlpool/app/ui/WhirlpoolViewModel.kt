@@ -9,7 +9,9 @@ import com.whirlpool.app.data.SourceServerConfig
 import com.whirlpool.engine.StatusChannel
 import com.whirlpool.engine.StatusChoice
 import com.whirlpool.engine.StatusFilterOption
+import com.whirlpool.engine.StatusSummary
 import com.whirlpool.engine.VideoItem
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,8 +100,9 @@ data class WhirlpoolUiState(
     val favorites: List<VideoItem> = emptyList(),
     val categories: List<String> = emptyList(),
     val channelDetails: List<StatusChannel> = emptyList(),
+    val availableChannels: List<ChannelMenuItem> = emptyList(),
     val activeChannel: String = "catflix",
-    val selectedFilters: Map<String, String> = emptyMap(),
+    val selectedFilters: Map<String, Set<String>> = emptyMap(),
     val selectedVideo: VideoItem? = null,
     val streamUrl: String? = null,
     val streamHeaders: Map<String, String> = emptyMap(),
@@ -110,6 +113,16 @@ data class WhirlpoolUiState(
     val settings: AppSettings = AppSettings(),
     val sourceServers: List<SourceServerConfig> = emptyList(),
     val activeServerBaseUrl: String = "",
+)
+
+data class ChannelMenuItem(
+    val serverBaseUrl: String,
+    val serverTitle: String,
+    val serverHost: String,
+    val channelId: String,
+    val channelTitle: String,
+    val channelDescription: String?,
+    val channelFaviconUrl: String?,
 )
 
 class WhirlpoolViewModel(
@@ -167,9 +180,14 @@ class WhirlpoolViewModel(
                         filters = normalizedFilters,
                     )
                     val videos = discovered
-                    val favoriteIds = repository.favorites().map { it.videoId }.toSet()
-                    val favoriteVideos = videos.filter { it.id in favoriteIds }
+                    val favoriteVideos = repository.favoriteVideos()
+                    val activeBaseUrl = repository.activeApiBaseUrl()
                     val sources = repository.listSourceServers()
+                    val availableChannels = buildChannelMenuItems(
+                        sources = sources,
+                        activeStatus = status,
+                        activeBaseUrl = activeBaseUrl,
+                    )
 
                     current.copy(
                         isLoading = false,
@@ -178,10 +196,11 @@ class WhirlpoolViewModel(
                         favorites = favoriteVideos,
                         categories = status.sources,
                         channelDetails = channels,
+                        availableChannels = availableChannels,
                         activeChannel = nextChannelId,
                         selectedFilters = normalizedFilters,
                         sourceServers = sources,
-                        activeServerBaseUrl = repository.activeApiBaseUrl(),
+                        activeServerBaseUrl = activeBaseUrl,
                         actionText = null,
                         errorText = null,
                     )
@@ -206,13 +225,38 @@ class WhirlpoolViewModel(
 
     fun onChannelSelected(channelId: String) {
         val current = mutableState.value
-        val selectedChannel = current.channelDetails.firstOrNull { channel -> channel.id == channelId }
-        val normalizedFilters = normalizeFilterSelection(selectedChannel, current.selectedFilters)
-        mutableState.value = current.copy(
-            activeChannel = channelId,
-            selectedFilters = normalizedFilters,
-        )
-        refreshVideosInBackground()
+        onChannelSelected(current.activeServerBaseUrl, channelId)
+    }
+
+    fun onChannelSelected(serverBaseUrl: String, channelId: String) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val currentActive = repository.activeApiBaseUrl()
+                    if (serverBaseUrl.isNotBlank() && serverBaseUrl != currentActive) {
+                        val changed = repository.setActiveSource(serverBaseUrl)
+                        if (!changed) {
+                            throw IOException("Unable to switch source.")
+                        }
+                    }
+                    repository.listSourceServers()
+                }
+            }.onSuccess { sources ->
+                val current = mutableState.value
+                mutableState.value = current.copy(
+                    activeChannel = channelId,
+                    sourceServers = sources,
+                    activeServerBaseUrl = repository.activeApiBaseUrl(),
+                    errorText = null,
+                )
+                refreshAll(showLoading = true)
+            }.onFailure { throwable ->
+                mutableState.value = mutableState.value.copy(
+                    errorText = throwable.message ?: "Unable to switch channel.",
+                )
+                log("Channel switch failed: ${throwable.message ?: "unknown error"}")
+            }
+        }
     }
 
     fun onFilterSelected(optionId: String, choiceId: String) {
@@ -220,18 +264,52 @@ class WhirlpoolViewModel(
         val selectedChannel = current.channelDetails.firstOrNull { channel ->
             channel.id == current.activeChannel
         } ?: return
-        val validChoice = selectedChannel
+        val selectedOption = selectedChannel
             .options
             .firstOrNull { option -> option.id == optionId }
-            ?.choices
-            ?.any { choice -> choice.id == choiceId }
-            ?: false
-        if (!validChoice) {
+            ?: return
+        val validChoice = selectedOption
+            .choices
+            .any { choice -> choice.id == choiceId }
+        if (!validChoice || selectedOption.choices.isEmpty()) {
             return
         }
 
+        val currentSelection = current.selectedFilters[optionId].orEmpty()
+        val updatedSelection = if (selectedOption.multiSelect) {
+            if (choiceId in currentSelection) {
+                currentSelection - choiceId
+            } else {
+                currentSelection + choiceId
+            }
+        } else {
+            setOf(choiceId)
+        }
+
         mutableState.value = current.copy(
-            selectedFilters = current.selectedFilters + (optionId to choiceId),
+            selectedFilters = current.selectedFilters + (optionId to updatedSelection),
+        )
+        refreshVideosInBackground()
+    }
+
+    fun onFilterToggleAll(optionId: String, selectAll: Boolean) {
+        val current = mutableState.value
+        val selectedChannel = current.channelDetails.firstOrNull { channel ->
+            channel.id == current.activeChannel
+        } ?: return
+        val selectedOption = selectedChannel
+            .options
+            .firstOrNull { option -> option.id == optionId && option.multiSelect }
+            ?: return
+
+        val updatedSelection = if (selectAll) {
+            selectedOption.choices.map { choice -> choice.id }.toSet()
+        } else {
+            emptySet()
+        }
+
+        mutableState.value = current.copy(
+            selectedFilters = current.selectedFilters + (optionId to updatedSelection),
         )
         refreshVideosInBackground()
     }
@@ -316,9 +394,7 @@ class WhirlpoolViewModel(
                     } else {
                         repository.addFavorite(video)
                     }
-                    repository.favorites().map { favorite ->
-                        mutableState.value.videos.firstOrNull { it.id == favorite.videoId }
-                    }.filterNotNull()
+                    repository.favoriteVideos()
                 }
             }.onSuccess { favorites ->
                 mutableState.value = mutableState.value.copy(favorites = favorites)
@@ -690,39 +766,103 @@ class WhirlpoolViewModel(
             StatusChannel(
                 id = channelId,
                 title = channelId,
+                description = null,
+                faviconUrl = null,
                 options = emptyList(),
             )
         }
     }
 
+    private fun buildChannelMenuItems(
+        sources: List<SourceServerConfig>,
+        activeStatus: StatusSummary,
+        activeBaseUrl: String,
+    ): List<ChannelMenuItem> {
+        val out = mutableListOf<ChannelMenuItem>()
+
+        sources.forEach { source ->
+            val status = if (source.baseUrl == activeBaseUrl) {
+                activeStatus
+            } else {
+                runCatching { repository.statusForSource(source.baseUrl) }.getOrNull()
+            } ?: return@forEach
+
+            val channels = normalizeChannels(status)
+            channels.forEach { channel ->
+                out += ChannelMenuItem(
+                    serverBaseUrl = source.baseUrl,
+                    serverTitle = source.title,
+                    serverHost = sourceHost(source.baseUrl),
+                    channelId = channel.id,
+                    channelTitle = channel.title.ifBlank { channel.id },
+                    channelDescription = channel.description,
+                    channelFaviconUrl = channel.faviconUrl,
+                )
+            }
+        }
+
+        return out.sortedWith(
+            compareBy(
+                String.CASE_INSENSITIVE_ORDER,
+                ChannelMenuItem::channelTitle,
+            ).thenBy(
+                String.CASE_INSENSITIVE_ORDER,
+                ChannelMenuItem::serverTitle,
+            ),
+        )
+    }
+
+    private fun sourceHost(baseUrl: String): String {
+        return baseUrl
+            .substringAfter("://")
+            .substringBefore("/")
+            .ifBlank { baseUrl }
+    }
+
     private fun normalizeFilterSelection(
         channel: StatusChannel?,
-        currentSelection: Map<String, String>,
-    ): Map<String, String> {
+        currentSelection: Map<String, Set<String>>,
+    ): Map<String, Set<String>> {
         val channelOptions = channel?.options.orEmpty()
         if (channelOptions.isEmpty()) {
             return emptyMap()
         }
 
-        val out = linkedMapOf<String, String>()
+        val out = linkedMapOf<String, Set<String>>()
         channelOptions.forEach { option ->
-            val chosen = pickChoice(option, currentSelection[option.id])
-            if (chosen != null) {
-                out[option.id] = chosen.id
+            val hasStoredSelection = option.id in currentSelection
+            val chosen = pickChoices(
+                option = option,
+                selectedChoiceIds = currentSelection[option.id].orEmpty(),
+                keepEmptySelection = hasStoredSelection,
+            )
+            if (chosen.isNotEmpty() || (option.multiSelect && hasStoredSelection)) {
+                out[option.id] = chosen
             }
         }
         return out
     }
 
-    private fun pickChoice(
+    private fun pickChoices(
         option: StatusFilterOption,
-        selectedChoiceId: String?,
-    ): StatusChoice? {
+        selectedChoiceIds: Set<String>,
+        keepEmptySelection: Boolean,
+    ): Set<String> {
         if (option.choices.isEmpty()) {
-            return null
+            return emptySet()
         }
-        return option.choices.firstOrNull { choice -> choice.id == selectedChoiceId }
-            ?: option.choices.first()
+        val validChoiceIds = option.choices.map { choice -> choice.id }.toSet()
+        if (option.multiSelect) {
+            val selected = selectedChoiceIds.filter { choiceId -> choiceId in validChoiceIds }.toSet()
+            return if (selected.isNotEmpty() || keepEmptySelection) {
+                selected
+            } else {
+                setOf(option.choices.first().id)
+            }
+        }
+        val selected = selectedChoiceIds.firstOrNull { choiceId -> choiceId in validChoiceIds }
+            ?: option.choices.first().id
+        return setOf(selected)
     }
 
     companion object {

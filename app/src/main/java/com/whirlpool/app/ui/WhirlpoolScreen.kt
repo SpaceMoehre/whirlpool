@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -37,6 +38,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -258,10 +261,15 @@ fun WhirlpoolScreen(
                         .substringBefore("/")
                         .ifBlank { "No source" },
                     channels = state.channelDetails,
+                    availableChannels = state.availableChannels,
                     activeChannelId = state.activeChannel,
+                    activeServerBaseUrl = state.activeServerBaseUrl,
                     selectedFilters = state.selectedFilters,
-                    onChannelSelected = viewModel::onChannelSelected,
+                    onChannelSelected = { serverBaseUrl, channelId ->
+                        viewModel.onChannelSelected(serverBaseUrl, channelId)
+                    },
                     onFilterSelected = viewModel::onFilterSelected,
+                    onFilterToggleAll = viewModel::onFilterToggleAll,
                     onClose = { showFilters = false },
                     onExport = viewModel::exportDatabase,
                     onImport = viewModel::importDatabase,
@@ -774,10 +782,13 @@ private fun FiltersSheet(
     darkModeEnabled: Boolean,
     serverHost: String,
     channels: List<StatusChannel>,
+    availableChannels: List<ChannelMenuItem>,
     activeChannelId: String,
-    selectedFilters: Map<String, String>,
-    onChannelSelected: (String) -> Unit,
+    activeServerBaseUrl: String,
+    selectedFilters: Map<String, Set<String>>,
+    onChannelSelected: (serverBaseUrl: String, channelId: String) -> Unit,
     onFilterSelected: (optionId: String, choiceId: String) -> Unit,
+    onFilterToggleAll: (optionId: String, selectAll: Boolean) -> Unit,
     onClose: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -785,6 +796,15 @@ private fun FiltersSheet(
     val palette = menuPalette(darkModeEnabled)
     val activeChannel = channels.firstOrNull { channel -> channel.id == activeChannelId }
         ?: channels.firstOrNull()
+    val sortedChannels = availableChannels.sortedWith(
+        compareBy(
+            String.CASE_INSENSITIVE_ORDER,
+            ChannelMenuItem::channelTitle,
+        ).thenBy(
+            String.CASE_INSENSITIVE_ORDER,
+            ChannelMenuItem::serverTitle,
+        ),
+    )
     var showChannelSelector by remember { mutableStateOf(false) }
     var selectedOptionForDialog by remember { mutableStateOf<StatusFilterOption?>(null) }
 
@@ -814,15 +834,15 @@ private fun FiltersSheet(
             title = "NETWORK",
             rows = listOf(
                 FilterMenuRow(
-                    label = "Server",
-                    value = serverHost,
-                    enabled = false,
-                    onClick = null,
-                ),
-                FilterMenuRow(
                     label = "Channel",
-                    value = activeChannel?.title ?: activeChannelId,
-                    enabled = channels.isNotEmpty(),
+                    value = buildString {
+                        append(activeChannel?.title ?: activeChannelId)
+                        // if (serverHost.isNotBlank()) {
+                        //     append(" · ")
+                        //     append(serverHost)
+                        // }
+                    },
+                    enabled = sortedChannels.isNotEmpty(),
                     onClick = { showChannelSelector = true },
                 ),
             ),
@@ -856,12 +876,12 @@ private fun FiltersSheet(
     }
 
     if (showChannelSelector) {
-        SelectionDialog(
-            title = "Choose Channel",
-            options = channels.map { channel -> channel.id to channel.title },
-            selectedId = activeChannel?.id,
+        ChannelSelectionDialog(
+            channels = sortedChannels,
+            selectedChannelId = activeChannel?.id,
+            selectedServerBaseUrl = activeServerBaseUrl,
             onSelect = { selected ->
-                onChannelSelected(selected)
+                onChannelSelected(selected.serverBaseUrl, selected.channelId)
                 showChannelSelector = false
             },
             onDismiss = { showChannelSelector = false },
@@ -869,13 +889,31 @@ private fun FiltersSheet(
     }
 
     selectedOptionForDialog?.let { option ->
+        val selectedIds = selectedFilters[option.id].orEmpty()
+        val allSelected = option.choices.isNotEmpty() &&
+            option.choices.all { choice -> choice.id in selectedIds }
         SelectionDialog(
             title = option.title,
             options = option.choices.map { choice -> choice.id to choice.title },
-            selectedId = selectedFilters[option.id],
+            selectedIds = selectedIds,
+            multiSelect = option.multiSelect,
             onSelect = { selected ->
                 onFilterSelected(option.id, selected)
-                selectedOptionForDialog = null
+                if (!option.multiSelect) {
+                    selectedOptionForDialog = null
+                }
+            },
+            toggleAllLabel = if (option.multiSelect) {
+                if (allSelected) "Deselect all" else "Select all"
+            } else {
+                null
+            },
+            onToggleAll = if (option.multiSelect) {
+                {
+                    onFilterToggleAll(option.id, !allSelected)
+                }
+            } else {
+                null
             },
             onDismiss = { selectedOptionForDialog = null },
         )
@@ -952,43 +990,123 @@ private data class FilterMenuRow(
 
 private fun selectedChoiceTitle(
     option: StatusFilterOption,
-    selectedFilters: Map<String, String>,
+    selectedFilters: Map<String, Set<String>>,
 ): String {
-    val selectedId = selectedFilters[option.id]
+    val selectedIds = selectedFilters[option.id].orEmpty()
+    if (option.multiSelect) {
+        val selectedTitles = option.choices
+            .filter { choice -> choice.id in selectedIds }
+            .map { choice -> choice.title }
+        return when {
+            selectedTitles.isEmpty() -> "Not set"
+            selectedTitles.size <= 2 -> selectedTitles.joinToString(", ")
+            else -> "${selectedTitles.size} selected"
+        }
+    }
+
+    val selectedId = selectedIds.firstOrNull()
     return option.choices.firstOrNull { choice -> choice.id == selectedId }?.title
         ?: option.choices.firstOrNull()?.title
         ?: "Not set"
 }
 
 @Composable
-private fun SelectionDialog(
-    title: String,
-    options: List<Pair<String, String>>,
-    selectedId: String?,
-    onSelect: (String) -> Unit,
+private fun ChannelSelectionDialog(
+    channels: List<ChannelMenuItem>,
+    selectedChannelId: String?,
+    selectedServerBaseUrl: String,
+    onSelect: (ChannelMenuItem) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
+        title = { Text("Choose Channel") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.forEach { option ->
-                    val isSelected = option.first == selectedId
-                    Text(
-                        text = option.second,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(
+                    channels,
+                    key = { channel -> "${channel.serverBaseUrl}::${channel.channelId}" },
+                ) { channel ->
+                    val isSelected = channel.channelId == selectedChannelId &&
+                        channel.serverBaseUrl == selectedServerBaseUrl
+                    val title = channel.channelTitle.ifBlank { channel.channelId }
+                    val description = buildString {
+                        append(channel.serverTitle.ifBlank { channel.serverHost })
+                        channel.channelDescription
+                            ?.takeIf { text -> text.isNotBlank() }
+                            ?.let { text ->
+                                append(" · ")
+                                append(text)
+                            }
+                    }
+
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                            .hapticClickable { onSelect(option.first) }
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isSelected) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                },
+                            )
+                            .hapticClickable { onSelect(channel) }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surface),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            val faviconUrl = channel.channelFaviconUrl?.takeIf { url -> url.isNotBlank() }
+                            if (faviconUrl != null) {
+                                AsyncImage(
+                                    model = faviconUrl,
+                                    contentDescription = "$title favicon",
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(10.dp)),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            } else {
+                                Text(
+                                    text = title.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -996,6 +1114,75 @@ private fun SelectionDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Close")
+            }
+        },
+    )
+}
+
+@Composable
+private fun SelectionDialog(
+    title: String,
+    options: List<Pair<String, String>>,
+    selectedIds: Set<String>,
+    multiSelect: Boolean,
+    onSelect: (String) -> Unit,
+    toggleAllLabel: String?,
+    onToggleAll: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(options, key = { option -> option.first }) { option ->
+                    val isSelected = option.first in selectedIds
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                            .hapticClickable { onSelect(option.first) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = option.second,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Selected",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (multiSelect && onToggleAll != null && toggleAllLabel != null) {
+                TextButton(onClick = onToggleAll) {
+                    Text(toggleAllLabel)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (multiSelect) "Done" else "Close")
             }
         },
     )

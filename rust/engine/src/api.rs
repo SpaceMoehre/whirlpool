@@ -195,6 +195,22 @@ fn select_channel_with_id_or_default<'a>(
 
 fn map_status_channel(channel: ApiStatusChannel) -> StatusChannel {
     let title = channel.name.unwrap_or_else(|| channel.id.clone());
+    let description = channel.description.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let favicon_url = channel.favicon.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
     let options = channel
         .options
         .into_iter()
@@ -211,6 +227,7 @@ fn map_status_channel(channel: ApiStatusChannel) -> StatusChannel {
             StatusFilterOption {
                 id: option.id,
                 title: option_title,
+                multi_select: option.multi_select,
                 choices,
             }
         })
@@ -219,6 +236,8 @@ fn map_status_channel(channel: ApiStatusChannel) -> StatusChannel {
     StatusChannel {
         id: channel.id,
         title,
+        description,
+        favicon_url,
         options,
     }
 }
@@ -236,36 +255,61 @@ fn build_videos_payload(
     payload.insert("page".to_string(), json!(page.to_string()));
     payload.insert("perPage".to_string(), json!(limit.to_string()));
 
-    let explicit_selections: HashMap<&str, &str> = selections
-        .iter()
-        .filter_map(|selection| {
-            let option_id = selection.option_id.trim();
-            let choice_id = selection.choice_id.trim();
-            if option_id.is_empty() || choice_id.is_empty() {
-                return None;
-            }
-            Some((option_id, choice_id))
-        })
-        .collect();
+    let mut explicit_selections: HashMap<&str, Vec<&str>> = HashMap::new();
+    for selection in selections {
+        let option_id = selection.option_id.trim();
+        if option_id.is_empty() {
+            continue;
+        }
+        let entry = explicit_selections.entry(option_id).or_default();
+        let choice_id = selection.choice_id.trim();
+        if !choice_id.is_empty() {
+            entry.push(choice_id);
+        }
+    }
 
     for option in &channel.options {
         if option.id.trim().is_empty() || option.options.is_empty() {
             continue;
         }
 
-        let selected_id = explicit_selections
-            .get(option.id.as_str())
-            .and_then(|candidate| {
-                option
+        let explicit_for_option = explicit_selections.get(option.id.as_str());
+        if option.multi_select {
+            if let Some(explicit_selected_ids) = explicit_for_option {
+                let selected_ids: Vec<&str> = option
                     .options
                     .iter()
-                    .find(|choice| choice.id == **candidate)
-                    .map(|choice| choice.id.as_str())
-            })
-            .or_else(|| option.options.first().map(|choice| choice.id.as_str()));
+                    .filter_map(|choice| {
+                        let selected = explicit_selected_ids
+                            .iter()
+                            .any(|selected_id| choice.id == **selected_id);
+                        if selected {
+                            Some(choice.id.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                payload.insert(option.id.clone(), json!(selected_ids));
+            } else if let Some(default_choice) = option.options.first() {
+                payload.insert(option.id.clone(), json!(vec![default_choice.id.as_str()]));
+            }
+        } else {
+            let selected_id = explicit_for_option
+                .and_then(|selected_ids| {
+                    selected_ids.iter().find_map(|selected_id| {
+                        option
+                            .options
+                            .iter()
+                            .find(|choice| choice.id == **selected_id)
+                            .map(|choice| choice.id.as_str())
+                    })
+                })
+                .or_else(|| option.options.first().map(|choice| choice.id.as_str()));
 
-        if let Some(selected_id) = selected_id {
-            payload.insert(option.id.clone(), json!(selected_id));
+            if let Some(selected_id) = selected_id {
+                payload.insert(option.id.clone(), json!(selected_id));
+            }
         }
     }
 
@@ -373,6 +417,36 @@ mod tests {
             payload.get("sort").and_then(|value| value.as_str()),
             Some("views")
         );
+    }
+
+    #[test]
+    fn maps_channel_description_and_favicon_to_status_channel() {
+        let payload = r#"{
+            "id": "catflix",
+            "name": "Catflix",
+            "description": " All cats, all the time. ",
+            "favicon": " https://cdn.example.com/catflix.png ",
+            "options": [{
+                "id": "tags",
+                "title": "Tags",
+                "multiSelect": true,
+                "options": [{ "id": "kittens", "title": "Kittens" }]
+            }]
+        }"#;
+
+        let channel: ApiStatusChannel =
+            serde_json::from_str(payload).expect("parse api status channel");
+        let mapped = map_status_channel(channel);
+
+        assert_eq!(mapped.id, "catflix");
+        assert_eq!(mapped.title, "Catflix");
+        assert_eq!(mapped.description.as_deref(), Some("All cats, all the time."));
+        assert_eq!(
+            mapped.favicon_url.as_deref(),
+            Some("https://cdn.example.com/catflix.png")
+        );
+        assert_eq!(mapped.options.len(), 1);
+        assert!(mapped.options[0].multi_select);
     }
 
     #[test]
@@ -545,6 +619,97 @@ mod tests {
             payload.get("query").and_then(|value| value.as_str()),
             Some("kittens")
         );
+    }
+
+    #[test]
+    fn payload_supports_multi_select_options() {
+        let status: ApiStatusResponse = serde_json::from_str(
+            r#"{
+                "channels": [{
+                    "id": "catflix",
+                    "default": true,
+                    "options": [{
+                        "id": "tags",
+                        "title": "Tags",
+                        "multiSelect": true,
+                        "options": [
+                            { "id": "kittens" },
+                            { "id": "tabby" },
+                            { "id": "orange" }
+                        ]
+                    }]
+                }]
+            }"#,
+        )
+        .expect("parse status");
+
+        let channel = select_channel(&status).expect("default channel");
+        let payload = build_videos_payload(
+            channel,
+            "",
+            1,
+            10,
+            &[
+                FilterSelection {
+                    option_id: "tags".to_string(),
+                    choice_id: "orange".to_string(),
+                },
+                FilterSelection {
+                    option_id: "tags".to_string(),
+                    choice_id: "kittens".to_string(),
+                },
+            ],
+        );
+
+        let selected = payload
+            .get("tags")
+            .and_then(|value| value.as_array())
+            .expect("tags array payload");
+        let ids: Vec<&str> = selected
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert_eq!(ids, vec!["kittens", "orange"]);
+    }
+
+    #[test]
+    fn payload_supports_multi_select_deselect_all() {
+        let status: ApiStatusResponse = serde_json::from_str(
+            r#"{
+                "channels": [{
+                    "id": "catflix",
+                    "default": true,
+                    "options": [{
+                        "id": "tags",
+                        "title": "Tags",
+                        "multiSelect": true,
+                        "options": [
+                            { "id": "kittens" },
+                            { "id": "tabby" }
+                        ]
+                    }]
+                }]
+            }"#,
+        )
+        .expect("parse status");
+
+        let channel = select_channel(&status).expect("default channel");
+        let payload = build_videos_payload(
+            channel,
+            "",
+            1,
+            10,
+            &[FilterSelection {
+                option_id: "tags".to_string(),
+                choice_id: "".to_string(),
+            }],
+        );
+
+        let selected = payload
+            .get("tags")
+            .and_then(|value| value.as_array())
+            .expect("tags array payload");
+        assert!(selected.is_empty(), "deselect all should serialize as empty array");
     }
 
     #[test]
