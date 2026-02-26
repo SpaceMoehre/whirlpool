@@ -90,18 +90,17 @@ The app uses:
 
 ```mermaid
 flowchart LR
-  UI[Jetpack Compose UI] --> VM[WhirlpoolViewModel]
-  VM --> Repo[EngineRepository]
-  Repo --> UniFFI[UniFFI Kotlin Bindings]
-  UniFFI --> Engine[Rust Engine]
+  ui["Jetpack Compose UI"] --> vm["WhirlpoolViewModel"]
+  vm --> repo["EngineRepository"]
+  repo --> uniffi["UniFFI Kotlin Bindings"]
+  uniffi --> engine["Rust Engine"]
 
-  Engine --> API[API Client]
-  Engine --> YTDLP[yt-dlp Client]
-  Engine --> DB[(SQLite)]
-  Engine --> Updater[GitHub Release Updater]
+  engine --> api["API Client"]
+  engine --> ytdlp["yt-dlp Client"]
+  engine --> db[("SQLite")]
+  engine --> updater["GitHub Release Updater"]
 
-  UI --> Player[Media3 ExoPlayer]
-  Engine --> DB
+  ui --> player["Media3 ExoPlayer"]
 ```
 
 ## Tech Stack
