@@ -4,6 +4,7 @@ import android.content.Context
 import com.chaquo.python.PyException
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import com.whirlpool.app.CrashReporter
 import com.whirlpool.engine.Engine
 import com.whirlpool.engine.EngineConfig
 import com.whirlpool.engine.FavoriteItem
@@ -35,6 +36,8 @@ class EngineRepository(private val context: Context) {
     private val engines = linkedMapOf<String, Engine>()
     @Volatile
     private var activeBaseUrlCache: String? = null
+    @Volatile
+    private var pythonExecutableCache: String? = null
 
     private val databaseFile: File by lazy {
         File(appContext.filesDir, "shared/whirlpool.db")
@@ -107,6 +110,13 @@ class EngineRepository(private val context: Context) {
     fun checkYtDlpUpdates() = activeEngine().checkYtDlpUpdate()
 
     fun ytDlpState(): String = ytDlpResolver.state()
+
+    fun recentCrashSummaries(limit: Int = 5): List<String> {
+        return CrashReporter.recentSummaries(appContext, limit)
+            .map { summary ->
+                "${summary.timestamp} | ${summary.exception} | screen=${summary.screen} | file=${summary.fileName}"
+            }
+    }
 
     fun activeApiBaseUrl(): String = resolveActiveApiBaseUrl().orEmpty()
 
@@ -269,17 +279,42 @@ class EngineRepository(private val context: Context) {
         synchronized(engineLock) {
             return engines.getOrPut(normalized) {
                 ensureBridgeScriptInstalled()
+                val pythonExecutable = resolvePythonExecutable()
+                val canUseCurlCffiBridge = pythonExecutable.startsWith("/") && File(pythonExecutable).exists()
                 val config = EngineConfig(
                     apiBaseUrl = normalized,
                     dbPath = databaseFile.absolutePath,
                     ytDlpPath = "chaquopy:yt_dlp",
-                    pythonExecutable = "python3",
-                    curlCffiScriptPath = curlCffiBridge.takeIf { it.exists() }?.absolutePath,
+                    pythonExecutable = pythonExecutable,
+                    curlCffiScriptPath = if (canUseCurlCffiBridge) {
+                        curlCffiBridge.takeIf { it.exists() }?.absolutePath
+                    } else {
+                        null
+                    },
                     ytDlpRepoApi = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
                 )
                 Engine(config)
             }
         }
+    }
+
+    private fun resolvePythonExecutable(): String {
+        pythonExecutableCache?.let { cached -> return cached }
+
+        val resolved = runCatching {
+            if (!Python.isStarted()) {
+                Python.start(AndroidPlatform(appContext))
+            }
+            val executable = Python.getInstance()
+                .getModule("sys")
+                .get("executable")
+                .toString()
+                .trim()
+            executable.takeIf { it.isNotBlank() } ?: "python3"
+        }.getOrDefault("python3")
+
+        pythonExecutableCache = resolved
+        return resolved
     }
 
     private fun resolveOperationalApiBaseUrl(): String {

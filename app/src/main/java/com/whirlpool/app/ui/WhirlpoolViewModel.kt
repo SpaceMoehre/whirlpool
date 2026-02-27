@@ -138,6 +138,7 @@ class WhirlpoolViewModel(
     init {
         log("App initialized.")
         loadSettingsAndSources()
+        loadRecentCrashReports()
         refreshAll()
     }
 
@@ -795,6 +796,21 @@ class WhirlpoolViewModel(
                 )
             }.onFailure { throwable ->
                 log("Settings load failed: ${throwable.message ?: "unknown error"}")
+            }
+        }
+    }
+
+    private fun loadRecentCrashReports() {
+        viewModelScope.launch {
+            val reports = withContext(Dispatchers.IO) {
+                repository.recentCrashSummaries(limit = 5)
+            }
+            if (reports.isEmpty()) {
+                return@launch
+            }
+            log("Recent crash reports:")
+            reports.forEach { report ->
+                log("Crash: $report")
             }
         }
     }

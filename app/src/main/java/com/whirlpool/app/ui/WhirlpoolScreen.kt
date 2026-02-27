@@ -22,6 +22,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -100,6 +106,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val FEED_NEXT_PAGE_PREFETCH_DISTANCE = 12
+private const val FEED_VIDEO_START_INDEX = 5
 private val HEADER_BAR_HEIGHT = 72.dp
 private val HEADER_BLUR_RADIUS = 24.dp
 
@@ -215,9 +222,11 @@ fun WhirlpoolScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val feedListState = rememberLazyListState()
+    val feedGridState = rememberLazyStaggeredGridState()
     val scope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     val isLandscapeLayout = configuration.screenWidthDp > configuration.screenHeightDp
+    var previousLandscapeLayout by rememberSaveable { mutableStateOf(isLandscapeLayout) }
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val headerOverlayHeight = statusBarTop + HEADER_BAR_HEIGHT
     var showFilters by remember { mutableStateOf(false) }
@@ -245,19 +254,30 @@ fun WhirlpoolScreen(
 
     LaunchedEffect(
         feedListState,
+        feedGridState,
+        isLandscapeLayout,
         state.videos.size,
         state.hasMorePages,
         state.isLoading,
         state.isLoadingNextPage,
     ) {
         snapshotFlow {
-            val layoutInfo = feedListState.layoutInfo
-            val totalItems = layoutInfo.totalItemsCount
-            val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val (totalItems, lastVisibleIndex) = if (isLandscapeLayout) {
+                val layoutInfo = feedGridState.layoutInfo
+                layoutInfo.totalItemsCount to (layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1)
+            } else {
+                val layoutInfo = feedListState.layoutInfo
+                layoutInfo.totalItemsCount to (layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1)
+            }
             val prefetchStartIndex = (totalItems - FEED_NEXT_PAGE_PREFETCH_DISTANCE).coerceAtLeast(0)
             val nearEnd = totalItems > 0 && lastVisibleIndex >= prefetchStartIndex
-            val hasScrolled = feedListState.firstVisibleItemIndex > 0 ||
-                feedListState.firstVisibleItemScrollOffset > 0
+            val hasScrolled = if (isLandscapeLayout) {
+                feedGridState.firstVisibleItemIndex > 0 ||
+                    feedGridState.firstVisibleItemScrollOffset > 0
+            } else {
+                feedListState.firstVisibleItemIndex > 0 ||
+                    feedListState.firstVisibleItemScrollOffset > 0
+            }
             nearEnd && hasScrolled
         }
             .distinctUntilChanged()
@@ -271,6 +291,43 @@ fun WhirlpoolScreen(
                     viewModel.loadNextPage()
                 }
             }
+    }
+
+    LaunchedEffect(isLandscapeLayout, state.videos.size) {
+        if (previousLandscapeLayout == isLandscapeLayout) {
+            return@LaunchedEffect
+        }
+
+        val sourceIndex = if (previousLandscapeLayout) {
+            feedGridState.firstVisibleItemIndex
+        } else {
+            feedListState.firstVisibleItemIndex
+        }
+        val sourceOffset = if (previousLandscapeLayout) {
+            feedGridState.firstVisibleItemScrollOffset
+        } else {
+            feedListState.firstVisibleItemScrollOffset
+        }
+
+        if (sourceIndex >= FEED_VIDEO_START_INDEX && state.videos.isNotEmpty()) {
+            val sourceVideoIndex = (sourceIndex - FEED_VIDEO_START_INDEX)
+                .coerceAtLeast(0)
+                .coerceAtMost(state.videos.lastIndex)
+            val targetIndex = FEED_VIDEO_START_INDEX + sourceVideoIndex
+            if (isLandscapeLayout) {
+                feedGridState.scrollToItem(index = targetIndex, scrollOffset = sourceOffset)
+            } else {
+                feedListState.scrollToItem(index = targetIndex, scrollOffset = sourceOffset)
+            }
+        } else {
+            if (isLandscapeLayout) {
+                feedGridState.scrollToItem(index = sourceIndex, scrollOffset = sourceOffset)
+            } else {
+                feedListState.scrollToItem(index = sourceIndex, scrollOffset = sourceOffset)
+            }
+        }
+
+        previousLandscapeLayout = isLandscapeLayout
     }
 
     Surface(
@@ -289,102 +346,185 @@ fun WhirlpoolScreen(
                         overlayColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.18f),
                     ),
             ) {
-                LazyColumn(
-                    state = feedListState,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    item {
-                        Spacer(
-                            modifier = Modifier
-                                .statusBarsPadding()
-                                .height(48.dp),
-                        )
-                    }
-
-                    item {
-                        SearchBar(
-                            query = state.query,
-                            onQueryChange = viewModel::onQueryChange,
-                            onSearch = viewModel::search,
-                        )
-                    }
-
-                    item {
-                        if (state.settings.categoriesSection) {
-                            SectionTitle("Categories")
-                            CategoriesRow(
-                                categories = state.categories,
-                                onCategoryClick = { category ->
-                                    viewModel.onQueryChange(category)
-                                    viewModel.search()
-                                },
+                if (isLandscapeLayout) {
+                    LazyVerticalStaggeredGrid(
+                        columns = StaggeredGridCells.Fixed(2),
+                        state = feedGridState,
+                        modifier = Modifier.fillMaxSize(),
+                        verticalItemSpacing = 10.dp,
+                    ) {
+                        item(
+                            key = "top_spacer",
+                            span = StaggeredGridItemSpan.FullLine,
+                        ) {
+                            Spacer(
+                                modifier = Modifier
+                                    .statusBarsPadding()
+                                    .height(48.dp),
                             )
                         }
-                    }
 
-                    item {
-                        if (state.settings.favoritesSection) {
-                            SectionTitle("Favorites")
-                            if (state.favorites.isNotEmpty()) {
-                                VideosRow(
-                                    videos = state.favorites,
-                                    onPlay = viewModel::playVideo,
-                                    onFavoriteToggle = viewModel::toggleFavorite,
-                                    favorites = state.favorites,
+                        item(
+                            key = "search",
+                            span = StaggeredGridItemSpan.FullLine,
+                        ) {
+                            SearchBar(
+                                query = state.query,
+                                onQueryChange = viewModel::onQueryChange,
+                                onSearch = viewModel::search,
+                            )
+                        }
+
+                        item(
+                            key = "categories",
+                            span = StaggeredGridItemSpan.FullLine,
+                        ) {
+                            if (state.settings.categoriesSection) {
+                                SectionTitle("Categories")
+                                CategoriesRow(
+                                    categories = state.categories,
+                                    onCategoryClick = { category ->
+                                        viewModel.onQueryChange(category)
+                                        viewModel.search()
+                                    },
                                 )
-                            } else {
-                                Spacer(modifier = Modifier.height(4.dp))
                             }
                         }
-                    }
 
-                    item {
-                        SectionTitle("Videos")
-                        state.errorText?.let {
-                            Text(
-                                text = it,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
+                        item(
+                            key = "favorites",
+                            span = StaggeredGridItemSpan.FullLine,
+                        ) {
+                            if (state.settings.favoritesSection) {
+                                SectionTitle("Favorites")
+                                if (state.favorites.isNotEmpty()) {
+                                    VideosRow(
+                                        videos = state.favorites,
+                                        onPlay = viewModel::playVideo,
+                                        onFavoriteToggle = viewModel::toggleFavorite,
+                                        favorites = state.favorites,
+                                    )
+                                } else {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+                            }
                         }
-                        state.actionText?.let {
-                            Text(
-                                text = it,
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
 
-                    if (isLandscapeLayout) {
-                        val videoRows = state.videos.chunked(2)
-                        items(videoRows, key = { row -> row.joinToString(separator = "|") { it.id } }) { row ->
-                            Row(
+                        item(
+                            key = "videos_header",
+                            span = StaggeredGridItemSpan.FullLine,
+                        ) {
+                            SectionTitle("Videos")
+                            state.errorText?.let {
+                                Text(
+                                    text = it,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                )
+                            }
+                            state.actionText?.let {
+                                Text(
+                                    text = it,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+
+                        staggeredItems(state.videos, key = { it.id }) { video ->
+                            val isFavorite = state.favorites.any { it.id == video.id }
+                            MainVideoCard(
+                                video = video,
+                                isFavorite = isFavorite,
+                                showDetails = state.settings.videoRowDetails,
+                                onPlay = { viewModel.playVideo(video) },
+                                onFavorite = { viewModel.toggleFavorite(video) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                row.forEach { video ->
-                                    val isFavorite = state.favorites.any { it.id == video.id }
-                                    MainVideoCard(
-                                        video = video,
-                                        isFavorite = isFavorite,
-                                        showDetails = state.settings.videoRowDetails,
-                                        onPlay = { viewModel.playVideo(video) },
-                                        onFavorite = { viewModel.toggleFavorite(video) },
-                                        modifier = Modifier.weight(1f),
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            )
+                        }
+
+                        item(
+                            key = "bottom_spacer",
+                            span = StaggeredGridItemSpan.FullLine,
+                        ) {
+                            Spacer(modifier = Modifier.height(20.dp))
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        state = feedListState,
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        item {
+                            Spacer(
+                                modifier = Modifier
+                                    .statusBarsPadding()
+                                    .height(48.dp),
+                            )
+                        }
+
+                        item {
+                            SearchBar(
+                                query = state.query,
+                                onQueryChange = viewModel::onQueryChange,
+                                onSearch = viewModel::search,
+                            )
+                        }
+
+                        item {
+                            if (state.settings.categoriesSection) {
+                                SectionTitle("Categories")
+                                CategoriesRow(
+                                    categories = state.categories,
+                                    onCategoryClick = { category ->
+                                        viewModel.onQueryChange(category)
+                                        viewModel.search()
+                                    },
+                                )
+                            }
+                        }
+
+                        item {
+                            if (state.settings.favoritesSection) {
+                                SectionTitle("Favorites")
+                                if (state.favorites.isNotEmpty()) {
+                                    VideosRow(
+                                        videos = state.favorites,
+                                        onPlay = viewModel::playVideo,
+                                        onFavoriteToggle = viewModel::toggleFavorite,
+                                        favorites = state.favorites,
                                     )
-                                }
-                                if (row.size == 1) {
-                                    Spacer(modifier = Modifier.weight(1f))
+                                } else {
+                                    Spacer(modifier = Modifier.height(4.dp))
                                 }
                             }
                         }
-                    } else {
+
+                        item {
+                            SectionTitle("Videos")
+                            state.errorText?.let {
+                                Text(
+                                    text = it,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                )
+                            }
+                            state.actionText?.let {
+                                Text(
+                                    text = it,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+
                         items(state.videos, key = { it.id }) { video ->
                             val isFavorite = state.favorites.any { it.id == video.id }
                             MainVideoCard(
@@ -398,10 +538,10 @@ fun WhirlpoolScreen(
                                     .padding(horizontal = 16.dp, vertical = 6.dp),
                             )
                         }
-                    }
 
-                    item {
-                        Spacer(modifier = Modifier.height(20.dp))
+                        item {
+                            Spacer(modifier = Modifier.height(20.dp))
+                        }
                     }
                 }
             }
@@ -417,7 +557,11 @@ fun WhirlpoolScreen(
                 onFilters = { showFilters = true },
                 onTitleTap = {
                     scope.launch {
-                        feedListState.scrollToItem(index = 0)
+                        if (isLandscapeLayout) {
+                            feedGridState.scrollToItem(index = 0)
+                        } else {
+                            feedListState.scrollToItem(index = 0)
+                        }
                     }
                 },
             )
@@ -732,9 +876,8 @@ private fun VideoCard(
                 contentDescription = video.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(124.dp)
                     .clip(RoundedCornerShape(10.dp)),
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.FillWidth,
             )
 
             FavoriteHeartButton(
@@ -786,9 +929,8 @@ private fun MainVideoCard(
                 contentDescription = video.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(196.dp)
                     .clip(RoundedCornerShape(10.dp)),
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.FillWidth,
             )
 
             FavoriteHeartButton(
