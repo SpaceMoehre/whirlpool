@@ -35,6 +35,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Verify Python interpreter for Chaquopy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.11 --version
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
@@ -82,9 +88,6 @@ jobs:
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
           scripts/build_android_libs.sh
 
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug
-
       - name: Prepare release signing key
         id: signing
         shell: bash
@@ -130,6 +133,7 @@ jobs:
       - name: Build signed release APK and AAB
         run: |
           ./gradlew :app:assembleRelease :app:bundleRelease \
+            --warning-mode all \
             -Pandroid.injected.signing.store.file="${{ steps.signing.outputs.store_file }}" \
             -Pandroid.injected.signing.store.password="${{ steps.signing.outputs.store_password }}" \
             -Pandroid.injected.signing.key.alias="${{ steps.signing.outputs.key_alias }}" \
@@ -138,10 +142,9 @@ jobs:
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: whirlpool-android-build
+          name: whirlpool-android-release-build
           if-no-files-found: error
           path: |
-            app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/*.aab
 
@@ -151,7 +154,6 @@ jobs:
           {
             echo "### Android build outputs"
             echo ""
-            echo "- Debug APK: \`app/build/outputs/apk/debug/app-debug.apk\`"
             echo "- Release APK(s): \`app/build/outputs/apk/release/\`"
             echo "- Release bundle(s): \`app/build/outputs/bundle/release/\`"
             echo ""
