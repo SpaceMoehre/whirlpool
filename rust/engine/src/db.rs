@@ -363,10 +363,11 @@ impl Database {
             let title: String = row.get(1)?;
             let page_url: String = row.get(2)?;
             let raw_data: Option<String> = row.get(8)?;
-            let extractor = raw_data
+            let parsed_video = raw_data
                 .as_deref()
-                .and_then(|payload| serde_json::from_str::<VideoItem>(payload).ok())
-                .and_then(|video| video.extractor);
+                .and_then(|payload| serde_json::from_str::<VideoItem>(payload).ok());
+            let extractor = parsed_video.as_ref().and_then(|video| video.extractor.clone());
+            let raw_json = parsed_video.as_ref().and_then(|video| video.raw_json.clone());
 
             Ok(VideoItem {
                 id: video_id.clone(),
@@ -388,6 +389,7 @@ impl Database {
                 view_count: row
                     .get::<_, Option<i64>>(7)?
                     .and_then(|views| u64::try_from(views).ok()),
+                raw_json,
             })
         })?;
 
@@ -993,6 +995,7 @@ mod tests {
             author_name: Some("author".to_string()),
             extractor: Some("youtube".to_string()),
             view_count: Some(42),
+            raw_json: Some(format!("{{\"id\":\"{id}\"}}")),
         }
     }
 

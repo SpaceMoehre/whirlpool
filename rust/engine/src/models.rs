@@ -79,6 +79,7 @@ pub struct VideoItem {
     pub author_name: Option<String>,
     pub extractor: Option<String>,
     pub view_count: Option<u64>,
+    pub raw_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]

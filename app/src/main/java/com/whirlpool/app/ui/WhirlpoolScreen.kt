@@ -2,8 +2,10 @@ package com.whirlpool.app.ui
 
 import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +38,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -77,10 +81,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.WindowInsets
@@ -102,6 +109,7 @@ import com.whirlpool.engine.VideoItem
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -109,6 +117,16 @@ private const val FEED_NEXT_PAGE_PREFETCH_DISTANCE = 12
 private const val FEED_VIDEO_START_INDEX = 5
 private val HEADER_BAR_HEIGHT = 72.dp
 private val HEADER_BLUR_RADIUS = 24.dp
+
+private enum class InAppMessageType {
+    Info,
+    Error,
+}
+
+private data class InAppMessage(
+    val type: InAppMessageType,
+    val text: String,
+)
 
 private data class MenuPalette(
     val sheet: Color,
@@ -231,6 +249,7 @@ fun WhirlpoolScreen(
     val headerOverlayHeight = statusBarTop + HEADER_BAR_HEIGHT
     var showFilters by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var selectedPopupMessage by remember { mutableStateOf<InAppMessage?>(null) }
 
     if (state.streamUrl != null) {
         val playerVideo = state.selectedVideo
@@ -402,7 +421,9 @@ fun WhirlpoolScreen(
                                         videos = state.favorites,
                                         onPlay = viewModel::playVideo,
                                         onFavoriteToggle = viewModel::toggleFavorite,
+                                        onDownload = viewModel::downloadVideo,
                                         favorites = state.favorites,
+                                        isVideoDownloaded = state::isVideoDownloaded,
                                     )
                                 } else {
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -415,32 +436,19 @@ fun WhirlpoolScreen(
                             span = StaggeredGridItemSpan.FullLine,
                         ) {
                             SectionTitle("Videos")
-                            state.errorText?.let {
-                                Text(
-                                    text = it,
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
-                            state.actionText?.let {
-                                Text(
-                                    text = it,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
                         }
 
                         staggeredItems(state.videos, key = { it.id }) { video ->
                             val isFavorite = state.favorites.any { it.id == video.id }
+                            val isDownloaded = state.isVideoDownloaded(video)
                             MainVideoCard(
                                 video = video,
                                 isFavorite = isFavorite,
+                                isDownloaded = isDownloaded,
                                 showDetails = state.settings.videoRowDetails,
                                 onPlay = { viewModel.playVideo(video) },
                                 onFavorite = { viewModel.toggleFavorite(video) },
+                                onDownload = { viewModel.downloadVideo(video) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -497,7 +505,9 @@ fun WhirlpoolScreen(
                                         videos = state.favorites,
                                         onPlay = viewModel::playVideo,
                                         onFavoriteToggle = viewModel::toggleFavorite,
+                                        onDownload = viewModel::downloadVideo,
                                         favorites = state.favorites,
+                                        isVideoDownloaded = state::isVideoDownloaded,
                                     )
                                 } else {
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -507,32 +517,19 @@ fun WhirlpoolScreen(
 
                         item {
                             SectionTitle("Videos")
-                            state.errorText?.let {
-                                Text(
-                                    text = it,
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
-                            state.actionText?.let {
-                                Text(
-                                    text = it,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
                         }
 
                         items(state.videos, key = { it.id }) { video ->
                             val isFavorite = state.favorites.any { it.id == video.id }
+                            val isDownloaded = state.isVideoDownloaded(video)
                             MainVideoCard(
                                 video = video,
                                 isFavorite = isFavorite,
+                                isDownloaded = isDownloaded,
                                 showDetails = state.settings.videoRowDetails,
                                 onPlay = { viewModel.playVideo(video) },
                                 onFavorite = { viewModel.toggleFavorite(video) },
+                                onDownload = { viewModel.downloadVideo(video) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp, vertical = 6.dp),
@@ -564,6 +561,27 @@ fun WhirlpoolScreen(
                         }
                     }
                 },
+            )
+
+            InAppMessagePopups(
+                messages = buildList {
+                    state.errorText
+                        ?.takeIf { text -> text.isNotBlank() }
+                        ?.let { text -> add(InAppMessage(InAppMessageType.Error, text)) }
+                    state.actionText
+                        ?.takeIf { text -> text.isNotBlank() }
+                        ?.let { text -> add(InAppMessage(InAppMessageType.Info, text)) }
+                },
+                headerOverlayHeight = headerOverlayHeight,
+                onMessageTap = { message -> selectedPopupMessage = message },
+                modifier = Modifier.align(Alignment.TopEnd),
+            )
+        }
+
+        selectedPopupMessage?.let { message ->
+            MessageContextDialog(
+                message = message,
+                onDismiss = { selectedPopupMessage = null },
             )
         }
 
@@ -806,6 +824,95 @@ private fun SectionTitle(title: String) {
 }
 
 @Composable
+private fun InAppMessagePopups(
+    messages: List<InAppMessage>,
+    headerOverlayHeight: androidx.compose.ui.unit.Dp,
+    onMessageTap: (InAppMessage) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (messages.isEmpty()) {
+        return
+    }
+
+    Column(
+        modifier = modifier
+            .padding(top = headerOverlayHeight + 8.dp, end = 12.dp, start = 12.dp)
+            .width(240.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        messages.forEach { message ->
+            val containerColor = if (message.type == InAppMessageType.Error) {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.95f)
+            } else {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+            }
+            val contentColor = if (message.type == InAppMessageType.Error) {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = containerColor),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.hapticClickable { onMessageTap(message) },
+            ) {
+                Text(
+                    text = previewPopupText(message.text),
+                    color = contentColor,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageContextDialog(
+    message: InAppMessage,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (message.type == InAppMessageType.Error) "Error Message" else "Info Message",
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+private fun previewPopupText(message: String): String {
+    val trimmed = message.trim()
+    if (trimmed.length <= 84) {
+        return trimmed
+    }
+    return "${trimmed.take(84)}..."
+}
+
+@Composable
 private fun CategoriesRow(
     categories: List<String>,
     onCategoryClick: (String) -> Unit,
@@ -841,17 +948,22 @@ private fun VideosRow(
     videos: List<VideoItem>,
     onPlay: (VideoItem) -> Unit,
     onFavoriteToggle: (VideoItem) -> Unit,
+    onDownload: (VideoItem) -> Unit,
     favorites: List<VideoItem>,
+    isVideoDownloaded: (VideoItem) -> Boolean,
 ) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Spacer(modifier = Modifier.width(6.dp)) }
         items(videos, key = { it.id }) { video ->
             val isFavorite = favorites.any { it.id == video.id }
+            val isDownloaded = isVideoDownloaded(video)
             VideoCard(
                 video = video,
                 isFavorite = isFavorite,
+                isDownloaded = isDownloaded,
                 onPlay = { onPlay(video) },
                 onFavorite = { onFavoriteToggle(video) },
+                onDownload = { onDownload(video) },
             )
         }
         item { Spacer(modifier = Modifier.width(6.dp)) }
@@ -859,16 +971,36 @@ private fun VideosRow(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun VideoCard(
     video: VideoItem,
     isFavorite: Boolean,
+    isDownloaded: Boolean,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
+    onDownload: () -> Unit,
 ) {
+    var showContextMenu by remember { mutableStateOf(false) }
+    var showRawJson by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
+    val clipboard = LocalClipboardManager.current
+    val rawJson = remember(video) {
+        video.rawJson?.trim()?.takeIf { value -> value.isNotEmpty() } ?: video.toFallbackRawJsonString()
+    }
+
     Column(
         modifier = Modifier
             .width(220.dp)
-            .hapticClickable(onClick = onPlay),
+            .combinedClickable(
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onPlay()
+                },
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showContextMenu = true
+                },
+            ),
     ) {
         Box {
             AsyncImage(
@@ -888,11 +1020,32 @@ private fun VideoCard(
                     .padding(8.dp)
             )
 
+            if (isDownloaded) {
+                DownloadedVideoBadge(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                )
+            }
+
             DurationBadge(
                 durationSeconds = video.durationSeconds,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(8.dp),
+            )
+
+            VideoContextMenu(
+                expanded = showContextMenu,
+                onDismiss = { showContextMenu = false },
+                onDownload = {
+                    showContextMenu = false
+                    onDownload()
+                },
+                onViewRawJson = {
+                    showContextMenu = false
+                    showRawJson = true
+                },
             )
         }
 
@@ -905,22 +1058,51 @@ private fun VideoCard(
             fontWeight = FontWeight.SemiBold,
         )
     }
+
+    if (showRawJson) {
+        RawVideoJsonDialog(
+            title = video.title,
+            rawJson = rawJson,
+            onCopy = { clipboard.setText(AnnotatedString(rawJson)) },
+            onDismiss = { showRawJson = false },
+        )
+    }
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun MainVideoCard(
     video: VideoItem,
     isFavorite: Boolean,
+    isDownloaded: Boolean,
     showDetails: Boolean,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
+    onDownload: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showContextMenu by remember { mutableStateOf(false) }
+    var showRawJson by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
+    val clipboard = LocalClipboardManager.current
+    val rawJson = remember(video) {
+        video.rawJson?.trim()?.takeIf { value -> value.isNotEmpty() } ?: video.toFallbackRawJsonString()
+    }
+
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .hapticClickable(onClick = onPlay)
+            .combinedClickable(
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onPlay()
+                },
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showContextMenu = true
+                },
+            )
             .padding(10.dp),
     ) {
         Box {
@@ -941,11 +1123,32 @@ private fun MainVideoCard(
                     .padding(8.dp)
             )
 
+            if (isDownloaded) {
+                DownloadedVideoBadge(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                )
+            }
+
             DurationBadge(
                 durationSeconds = video.durationSeconds,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(8.dp),
+            )
+
+            VideoContextMenu(
+                expanded = showContextMenu,
+                onDismiss = { showContextMenu = false },
+                onDownload = {
+                    showContextMenu = false
+                    onDownload()
+                },
+                onViewRawJson = {
+                    showContextMenu = false
+                    showRawJson = true
+                },
             )
         }
 
@@ -969,6 +1172,83 @@ private fun MainVideoCard(
             }
         }
     }
+
+    if (showRawJson) {
+        RawVideoJsonDialog(
+            title = video.title,
+            rawJson = rawJson,
+            onCopy = { clipboard.setText(AnnotatedString(rawJson)) },
+            onDismiss = { showRawJson = false },
+        )
+    }
+}
+
+@Composable
+private fun VideoContextMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit,
+    onViewRawJson: () -> Unit,
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+    ) {
+        DropdownMenuItem(
+            text = { Text("Download Video") },
+            onClick = onDownload,
+        )
+        DropdownMenuItem(
+            text = { Text("View Raw JSON") },
+            onClick = onViewRawJson,
+        )
+    }
+}
+
+@Composable
+private fun RawVideoJsonDialog(
+    title: String,
+    rawJson: String,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = title.ifBlank { "Video JSON" },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .padding(10.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = rawJson,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCopy) {
+                Text("Copy")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
 }
 
 @Composable
@@ -1029,6 +1309,25 @@ private fun FavoriteHeartButton(
             contentDescription = if (isFavorite) "Remove favorite" else "Add favorite",
             tint = tint,
             modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
+private fun DownloadedVideoBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(24.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.55f))
+            .padding(4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(id = R.drawable.ic_whirlpool_downloaded),
+            contentDescription = "Downloaded",
+            tint = Color(0xFF2ECC71),
+            modifier = Modifier.size(14.dp),
         )
     }
 }
@@ -1867,4 +2166,18 @@ private fun formatVideoDuration(durationSeconds: UInt?): String? {
     } else {
         "%02d:%02d".format(minutes, remainingSeconds)
     }
+}
+
+private fun VideoItem.toFallbackRawJsonString(): String {
+    val payload = JSONObject()
+        .put("id", id)
+        .put("title", title)
+        .put("pageUrl", pageUrl)
+        .put("durationSeconds", durationSeconds?.toLong())
+        .put("imageUrl", imageUrl)
+        .put("network", network)
+        .put("authorName", authorName)
+        .put("extractor", extractor)
+        .put("viewCount", viewCount?.toString())
+    return payload.toString(2)
 }

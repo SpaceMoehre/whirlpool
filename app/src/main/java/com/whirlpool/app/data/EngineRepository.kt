@@ -1,6 +1,7 @@
 package com.whirlpool.app.data
 
 import android.content.Context
+import android.os.Environment
 import com.chaquo.python.PyException
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
@@ -14,13 +15,20 @@ import com.whirlpool.engine.StatusSummary
 import com.whirlpool.engine.VideoItem
 import java.io.File
 import java.io.IOException
+import java.net.URI
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.util.Locale
 import org.json.JSONObject
 
 private const val STARTING_SOURCE_BASE_URL = "https://getfigleaf.com"
 private const val ACTIVE_SOURCE_KEY = "settings.sources.active"
 private const val SOURCES_BOOTSTRAPPED_KEY = "settings.sources.bootstrapped"
 private const val SETTINGS_PREFIX = "settings."
+private const val DOWNLOADED_VIDEO_KEY_PREFIX = "downloads.video."
 private val URL_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
+private val ALLOWED_SOURCE_SCHEMES = setOf("http", "https")
+private val ALLOWED_STREAM_SCHEMES = setOf("http", "https")
 
 data class SourceServerConfig(
     val baseUrl: String,
@@ -90,6 +98,54 @@ class EngineRepository(private val context: Context) {
 
     fun resolve(pageUrl: String, ytdlpCommand: String? = null): PlaybackResolution =
         ytDlpResolver.resolve(pageUrl, ytdlpCommand)
+
+    fun downloadVideo(
+        pageUrl: String,
+        title: String?,
+        channelId: String,
+        videoId: String,
+        ytdlpCommand: String? = null,
+    ): VideoDownloadResult {
+        val downloadsDir = appContext
+            .getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+            ?.let { moviesDir -> File(moviesDir, "Whirlpool") }
+            ?: File(appContext.filesDir, "downloads")
+        if (!downloadsDir.exists()) {
+            downloadsDir.mkdirs()
+        }
+        val downloaded = ytDlpResolver.download(
+            pageUrl = pageUrl,
+            outputDir = downloadsDir,
+            filenameHint = title,
+            ytdlpCommand = ytdlpCommand,
+        )
+        val tracked = trackDownloadedVideo(
+            channelId = channelId,
+            videoId = videoId,
+            savedPath = downloaded.savedPath,
+        )
+        if (!tracked) {
+            throw IOException("Downloaded file saved but failed to index it for offline playback.")
+        }
+        return downloaded
+    }
+
+    fun downloadedVideoPath(channelId: String, videoId: String): String? {
+        val key = downloadedVideoPreferenceKey(channelId, videoId) ?: return null
+        val storedPath = settingsEngine()
+            .getUserPreference(key)
+            ?.trim()
+            ?.takeIf { value -> value.isNotEmpty() }
+            ?: return null
+        val file = File(storedPath)
+        if (file.exists() && file.isFile) {
+            return file.absolutePath
+        }
+
+        // Best-effort cleanup of stale mappings.
+        settingsEngine().setUserPreference(key, "")
+        return null
+    }
 
     fun favorites(): List<FavoriteItem> = activeEngine().listFavorites()
 
@@ -253,6 +309,15 @@ class EngineRepository(private val context: Context) {
         return ok
     }
 
+    private fun trackDownloadedVideo(channelId: String, videoId: String, savedPath: String): Boolean {
+        val key = downloadedVideoPreferenceKey(channelId, videoId) ?: return false
+        val file = File(savedPath)
+        if (!file.exists() || !file.isFile) {
+            return false
+        }
+        return settingsEngine().setUserPreference(key, file.absolutePath)
+    }
+
     private fun ensureBridgeScriptInstalled() {
         if (curlCffiBridge.exists()) return
 
@@ -393,12 +458,17 @@ internal fun sourceUrlCandidates(userInput: String): List<String> {
         return emptyList()
     }
     if (URL_SCHEME_REGEX.containsMatchIn(trimmed)) {
-        return listOf(normalizeConfiguredBaseUrl(trimmed))
+        return normalizeConfiguredBaseUrl(trimmed)
+            .takeIf { candidate -> candidate.isNotBlank() }
+            ?.let(::listOf)
+            ?: emptyList()
     }
     return listOf(
         normalizeConfiguredBaseUrl("https://$trimmed"),
         normalizeConfiguredBaseUrl("http://$trimmed"),
     )
+        .filter { candidate -> candidate.isNotBlank() }
+        .distinct()
 }
 
 internal fun normalizeConfiguredBaseUrl(input: String): String {
@@ -406,7 +476,29 @@ internal fun normalizeConfiguredBaseUrl(input: String): String {
     if (trimmed.isBlank()) {
         return ""
     }
-    return if (URL_SCHEME_REGEX.containsMatchIn(trimmed)) trimmed else "https://$trimmed"
+    if (trimmed.any { ch -> ch.isWhitespace() || ch == '\u0000' }) {
+        return ""
+    }
+
+    val candidate = if (URL_SCHEME_REGEX.containsMatchIn(trimmed)) trimmed else "https://$trimmed"
+    val uri = runCatching { URI(candidate) }.getOrNull() ?: return ""
+    val scheme = uri.scheme?.lowercase(Locale.US) ?: return ""
+    if (scheme !in ALLOWED_SOURCE_SCHEMES) {
+        return ""
+    }
+    if (uri.userInfo != null) {
+        return ""
+    }
+    val host = uri.host?.takeIf { hostValue -> hostValue.isNotBlank() } ?: return ""
+    val port = if (uri.port in 1..65535) ":${uri.port}" else ""
+    val normalizedHost = if (':' in host && !host.startsWith("[") && !host.endsWith("]")) {
+        "[$host]"
+    } else {
+        host
+    }
+    val path = uri.rawPath.orEmpty()
+    val query = uri.rawQuery?.let { rawQuery -> "?$rawQuery" }.orEmpty()
+    return "$scheme://$normalizedHost$port$path$query".trimEnd('/')
 }
 
 private fun sourceTitleFromBaseUrl(baseUrl: String): String {
@@ -430,6 +522,16 @@ data class PlaybackResolution(
     val ext: String?,
     val protocol: String?,
     val durationSeconds: UInt?,
+    val ytDlpVersion: String?,
+    val diagnostics: List<String>,
+)
+
+data class VideoDownloadResult(
+    val id: String,
+    val title: String,
+    val pageUrl: String,
+    val savedPath: String,
+    val savedName: String,
     val ytDlpVersion: String?,
     val diagnostics: List<String>,
 )
@@ -468,6 +570,44 @@ private class YtDlpResolver(private val context: Context) {
         }
     }
 
+    fun download(
+        pageUrl: String,
+        outputDir: File,
+        filenameHint: String?,
+        ytdlpCommand: String? = null,
+    ): VideoDownloadResult {
+        ensurePythonStarted()
+
+        val normalizedCommand = ytdlpCommand
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        return try {
+            val module = Python.getInstance().getModule("ytdlp_bridge")
+            val payload = module.callAttr(
+                "download",
+                pageUrl,
+                outputDir.absolutePath,
+                filenameHint.orEmpty(),
+                normalizedCommand,
+            ).toString()
+            val result = parseDownloadPayload(payload, pageUrl)
+
+            lastState = buildString {
+                append("yt-dlp download ok")
+                normalizedCommand?.let { append(" custom_args=true") }
+                append(" file=")
+                append(result.savedName)
+            }
+            result
+        } catch (err: PyException) {
+            lastState = "yt-dlp python error: ${err.message ?: "unknown"}"
+            throw IOException("yt-dlp python error: ${err.message ?: "unknown"}", err)
+        } catch (err: Throwable) {
+            lastState = "yt-dlp resolver error: ${err.message ?: "unknown"}"
+            throw IOException("yt-dlp resolver error: ${err.message ?: "unknown"}", err)
+        }
+    }
+
     @Synchronized
     private fun ensurePythonStarted() {
         if (!Python.isStarted()) {
@@ -486,15 +626,19 @@ internal fun parseResolutionPayload(payload: String, pageUrl: String): PlaybackR
     if (streamUrl.isEmpty()) {
         throw IOException("yt-dlp did not return a stream url")
     }
+    if (!isAllowedSchemeUrl(streamUrl, ALLOWED_STREAM_SCHEMES)) {
+        throw IOException("yt-dlp returned unsupported stream url scheme")
+    }
 
     val headers = buildMap {
         val objectHeaders = json.optJSONObject("requestHeaders")
         if (objectHeaders != null) {
             val keys = objectHeaders.keys()
             while (keys.hasNext()) {
-                val key = keys.next()
-                val value = objectHeaders.optString(key).trim()
-                if (key.isNotBlank() && value.isNotBlank()) {
+                val rawKey = keys.next()
+                val key = sanitizeHeaderComponent(rawKey)
+                val value = sanitizeHeaderComponent(objectHeaders.optString(rawKey))
+                if (key != null && value != null) {
                     put(key, value)
                 }
             }
@@ -527,4 +671,71 @@ internal fun parseResolutionPayload(payload: String, pageUrl: String): PlaybackR
             }
         },
     )
+}
+
+internal fun parseDownloadPayload(payload: String, pageUrl: String): VideoDownloadResult {
+    val json = JSONObject(payload)
+    val savedPath = json.optString("savedPath").trim()
+    if (savedPath.isEmpty()) {
+        throw IOException("yt-dlp download did not return a saved file path")
+    }
+
+    return VideoDownloadResult(
+        id = json.optString("id", pageUrl),
+        title = json.optString("title", "Untitled"),
+        pageUrl = json.optString("pageUrl", pageUrl),
+        savedPath = savedPath,
+        savedName = json.optString("savedName")
+            .trim()
+            .ifEmpty { File(savedPath).name.ifEmpty { "video.mp4" } },
+        ytDlpVersion = json.optString("ytDlpVersion").takeIf { it.isNotBlank() },
+        diagnostics = buildList {
+            val values = json.optJSONArray("diagnostics") ?: return@buildList
+            for (index in 0 until values.length()) {
+                val entry = values.optString(index).trim()
+                if (entry.isNotEmpty()) {
+                    add(entry)
+                }
+            }
+        },
+    )
+}
+
+private fun sanitizeHeaderComponent(input: String?): String? {
+    val normalized = input
+        ?.trim()
+        ?.takeIf { value -> value.isNotEmpty() }
+        ?: return null
+    if (
+        normalized.contains('\r') ||
+        normalized.contains('\n') ||
+        normalized.contains('\u0000')
+    ) {
+        return null
+    }
+    return normalized
+}
+
+private fun isAllowedSchemeUrl(url: String, allowedSchemes: Set<String>): Boolean {
+    val parsed = runCatching { URI(url) }.getOrNull() ?: return false
+    val scheme = parsed.scheme?.lowercase(Locale.US) ?: return false
+    return scheme in allowedSchemes
+}
+
+internal fun downloadedVideoPreferenceKey(channelId: String, videoId: String): String? {
+    val normalizedChannel = channelId.trim()
+    val normalizedVideoId = videoId.trim()
+    if (normalizedChannel.isEmpty() || normalizedVideoId.isEmpty()) {
+        return null
+    }
+    return buildString {
+        append(DOWNLOADED_VIDEO_KEY_PREFIX)
+        append(escapeDownloadedVideoKeyToken(normalizedChannel))
+        append("::")
+        append(escapeDownloadedVideoKeyToken(normalizedVideoId))
+    }
+}
+
+private fun escapeDownloadedVideoKeyToken(value: String): String {
+    return URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
 }

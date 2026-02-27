@@ -5,13 +5,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.whirlpool.app.data.EngineRepository
+import com.whirlpool.app.data.PlaybackResolution
 import com.whirlpool.app.data.SourceServerConfig
 import com.whirlpool.engine.StatusChannel
 import com.whirlpool.engine.StatusChoice
 import com.whirlpool.engine.StatusFilterOption
 import com.whirlpool.engine.StatusSummary
 import com.whirlpool.engine.VideoItem
+import java.io.File
 import java.io.IOException
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -91,6 +96,18 @@ object SettingKeys {
 
     const val FOLLOWING_TAGS = "settings.following.tags"
     const val FOLLOWING_UPLOADERS = "settings.following.uploaders"
+
+    const val FEED_ACTIVE_CHANNEL = "settings.feed.active_channel"
+    const val FEED_SELECTED_FILTERS = "settings.feed.selected_filters"
+}
+
+private fun videoDownloadUiKey(channelId: String, videoId: String): String? {
+    val normalizedChannelId = channelId.trim()
+    val normalizedVideoId = videoId.trim()
+    if (normalizedChannelId.isEmpty() || normalizedVideoId.isEmpty()) {
+        return null
+    }
+    return "$normalizedChannelId::$normalizedVideoId"
 }
 
 data class WhirlpoolUiState(
@@ -116,7 +133,17 @@ data class WhirlpoolUiState(
     val settings: AppSettings = AppSettings(),
     val sourceServers: List<SourceServerConfig> = emptyList(),
     val activeServerBaseUrl: String = "",
-)
+    val downloadedVideoKeys: Set<String> = emptySet(),
+) {
+    fun isVideoDownloaded(video: VideoItem): Boolean {
+        val channelId = video.network
+            ?.trim()
+            ?.takeIf { value -> value.isNotEmpty() }
+            ?: activeChannel
+        val key = videoDownloadUiKey(channelId = channelId, videoId = video.id) ?: return false
+        return key in downloadedVideoKeys
+    }
+}
 
 data class ChannelMenuItem(
     val serverBaseUrl: String,
@@ -137,9 +164,8 @@ class WhirlpoolViewModel(
 
     init {
         log("App initialized.")
-        loadSettingsAndSources()
+        loadSettingsAndSources(refreshFeed = true)
         loadRecentCrashReports()
-        refreshAll()
     }
 
     fun onQueryChange(query: String) {
@@ -185,6 +211,10 @@ class WhirlpoolViewModel(
                     )
                     val videos = discovered
                     val favoriteVideos = repository.favoriteVideos()
+                    val downloadedVideoKeys = collectDownloadedVideoKeys(
+                        videos = videos + favoriteVideos,
+                        fallbackChannelId = nextChannelId,
+                    )
                     val activeBaseUrl = repository.activeApiBaseUrl()
                     val sources = repository.listSourceServers()
                     val availableChannels = buildChannelMenuItems(
@@ -208,12 +238,17 @@ class WhirlpoolViewModel(
                         isLoadingNextPage = false,
                         sourceServers = sources,
                         activeServerBaseUrl = activeBaseUrl,
+                        downloadedVideoKeys = downloadedVideoKeys,
                         actionText = null,
                         errorText = null,
                     )
                 }
             }.onSuccess { state ->
                 mutableState.value = state
+                persistFeedState(
+                    activeChannel = state.activeChannel,
+                    selectedFilters = state.selectedFilters,
+                )
                 log("Feed loaded: ${state.videos.size} videos, ${state.categories.size} categories.")
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
@@ -238,32 +273,41 @@ class WhirlpoolViewModel(
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    repository.discover(
+                    val discovered = repository.discover(
                         query = current.query,
                         page = nextPage,
                         limit = FEED_PAGE_LIMIT,
                         channelId = current.activeChannel,
                         filters = current.selectedFilters,
                     )
+                    val downloadedVideoKeys = collectDownloadedVideoKeys(
+                        videos = discovered,
+                        fallbackChannelId = current.activeChannel,
+                    )
+                    PagedVideosResult(
+                        discovered = discovered,
+                        downloadedVideoKeys = downloadedVideoKeys,
+                    )
                 }
-            }.onSuccess { discovered ->
+            }.onSuccess { pageResult ->
                 val latest = mutableState.value
                 if (!latest.isLoadingNextPage) {
                     return@onSuccess
                 }
 
                 val existing = latest.videos
-                val appended = (existing + discovered).distinctBy { video -> video.id }
-                val hasMore = discovered.size >= FEED_PAGE_LIMIT.toInt()
+                val appended = (existing + pageResult.discovered).distinctBy { video -> video.id }
+                val hasMore = pageResult.discovered.size >= FEED_PAGE_LIMIT.toInt()
 
                 mutableState.value = latest.copy(
                     videos = appended,
-                    currentPage = if (discovered.isNotEmpty()) nextPage else latest.currentPage,
-                    hasMorePages = hasMore && discovered.isNotEmpty(),
+                    currentPage = if (pageResult.discovered.isNotEmpty()) nextPage else latest.currentPage,
+                    hasMorePages = hasMore && pageResult.discovered.isNotEmpty(),
                     isLoadingNextPage = false,
+                    downloadedVideoKeys = latest.downloadedVideoKeys + pageResult.downloadedVideoKeys,
                 )
-                if (discovered.isNotEmpty()) {
-                    log("Loaded page $nextPage (+${discovered.size} videos).")
+                if (pageResult.discovered.isNotEmpty()) {
+                    log("Loaded page $nextPage (+${pageResult.discovered.size} videos).")
                 }
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
@@ -305,6 +349,10 @@ class WhirlpoolViewModel(
                     activeServerBaseUrl = repository.activeApiBaseUrl(),
                     errorText = null,
                 )
+                persistFeedState(
+                    activeChannel = channelId,
+                    selectedFilters = current.selectedFilters,
+                )
                 refreshAll(showLoading = true)
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
@@ -342,8 +390,11 @@ class WhirlpoolViewModel(
             setOf(choiceId)
         }
 
-        mutableState.value = current.copy(
-            selectedFilters = current.selectedFilters + (optionId to updatedSelection),
+        val updatedFilters = current.selectedFilters + (optionId to updatedSelection)
+        mutableState.value = current.copy(selectedFilters = updatedFilters)
+        persistFeedState(
+            activeChannel = current.activeChannel,
+            selectedFilters = updatedFilters,
         )
         refreshVideosInBackground()
     }
@@ -364,8 +415,11 @@ class WhirlpoolViewModel(
             emptySet()
         }
 
-        mutableState.value = current.copy(
-            selectedFilters = current.selectedFilters + (optionId to updatedSelection),
+        val updatedFilters = current.selectedFilters + (optionId to updatedSelection)
+        mutableState.value = current.copy(selectedFilters = updatedFilters)
+        persistFeedState(
+            activeChannel = current.activeChannel,
+            selectedFilters = updatedFilters,
         )
         refreshVideosInBackground()
     }
@@ -373,48 +427,68 @@ class WhirlpoolViewModel(
     fun playVideo(video: VideoItem) {
         log("Playback requested for: ${video.title}")
         log("yt-dlp state: ${repository.ytDlpState()}")
-        val selectedChannel = mutableState.value.channelDetails.firstOrNull { channel ->
-            channel.id == mutableState.value.activeChannel
-        }
-        val channelYtdlpCommand = selectedChannel
-            ?.ytdlpCommand
-            ?.takeIf { command -> command.isNotBlank() }
+        val channelYtdlpCommand = selectedChannelYtdlpCommand()
+        val videoChannelId = resolveVideoChannelId(video)
         channelYtdlpCommand?.let { command ->
             log("Applying channel yt-dlp args: $command")
         }
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val resolved = repository.resolve(
-                        pageUrl = video.pageUrl,
-                        ytdlpCommand = channelYtdlpCommand,
+                    val downloadedPath = repository.downloadedVideoPath(
+                        channelId = videoChannelId,
+                        videoId = video.id,
                     )
-                    Pair(
-                        mutableState.value.copy(
+                    if (downloadedPath != null) {
+                        PlaybackLaunch.Local(downloadedPath)
+                    } else {
+                        PlaybackLaunch.Remote(
+                            repository.resolve(
+                                pageUrl = video.pageUrl,
+                                ytdlpCommand = channelYtdlpCommand,
+                            ),
+                        )
+                    }
+                }
+            }.onSuccess { launch ->
+                when (launch) {
+                    is PlaybackLaunch.Local -> {
+                        val localUri = File(launch.path).toURI().toString()
+                        mutableState.value = mutableState.value.copy(
+                            selectedVideo = video,
+                            streamUrl = localUri,
+                            streamHeaders = emptyMap(),
+                            errorText = null,
+                            actionText = null,
+                        )
+                        log("Playing downloaded file for $videoChannelId/${video.id}: ${launch.path}")
+                    }
+
+                    is PlaybackLaunch.Remote -> {
+                        val resolved = launch.resolution
+                        val state = mutableState.value.copy(
                             selectedVideo = video,
                             streamUrl = resolved.streamUrl,
                             streamHeaders = resolved.requestHeaders,
                             errorText = null,
                             actionText = null,
-                        ),
-                        resolved,
-                    )
+                        )
+                        mutableState.value = state
+                        val host = state.streamUrl
+                            ?.substringAfter("://")
+                            ?.substringBefore("/")
+                            ?.ifBlank { "unknown" }
+                            ?: "unknown"
+                        log(
+                            "Playback stream resolved successfully " +
+                                "(headers=${state.streamHeaders.size}, host=$host).",
+                        )
+                        resolved.ytDlpVersion?.let { log("yt-dlp version: $it") }
+                        resolved.diagnostics
+                            .takeLast(3)
+                            .forEach { log("yt-dlp diagnostic: $it") }
+                    }
                 }
-            }.onSuccess { (state, resolved) ->
-                mutableState.value = state
-                val host = state.streamUrl
-                    ?.substringAfter("://")
-                    ?.substringBefore("/")
-                    ?.ifBlank { "unknown" }
-                    ?: "unknown"
-                log(
-                    "Playback stream resolved successfully " +
-                        "(headers=${state.streamHeaders.size}, host=$host).",
-                )
-                resolved.ytDlpVersion?.let { log("yt-dlp version: $it") }
-                resolved.diagnostics
-                    .takeLast(3)
-                    .forEach { log("yt-dlp diagnostic: $it") }
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
                     selectedVideo = null,
@@ -424,6 +498,57 @@ class WhirlpoolViewModel(
                     actionText = null,
                 )
                 log("Playback failed: ${throwable.message ?: "unknown error"}")
+                log("yt-dlp state after failure: ${repository.ytDlpState()}")
+            }
+        }
+    }
+
+    fun downloadVideo(video: VideoItem) {
+        log("Download requested for: ${video.title}")
+        log("yt-dlp state: ${repository.ytDlpState()}")
+        val channelYtdlpCommand = selectedChannelYtdlpCommand()
+        val videoChannelId = resolveVideoChannelId(video)
+        channelYtdlpCommand?.let { command ->
+            log("Applying channel yt-dlp args for download: $command")
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.downloadVideo(
+                        pageUrl = video.pageUrl,
+                        title = video.title,
+                        channelId = videoChannelId,
+                        videoId = video.id,
+                        ytdlpCommand = channelYtdlpCommand,
+                    )
+                }
+            }.onSuccess { downloaded ->
+                val downloadKey = videoDownloadUiKey(
+                    channelId = videoChannelId,
+                    videoId = video.id,
+                )
+                val current = mutableState.value
+                mutableState.value = current.copy(
+                    actionText = "Saved ${downloaded.savedName}",
+                    errorText = null,
+                    downloadedVideoKeys = if (downloadKey != null) {
+                        current.downloadedVideoKeys + downloadKey
+                    } else {
+                        current.downloadedVideoKeys
+                    },
+                )
+                log("Download finished: ${downloaded.savedPath}")
+                downloaded.ytDlpVersion?.let { log("yt-dlp version: $it") }
+                downloaded.diagnostics
+                    .takeLast(3)
+                    .forEach { log("yt-dlp diagnostic: $it") }
+            }.onFailure { throwable ->
+                mutableState.value = mutableState.value.copy(
+                    errorText = throwable.message ?: "Unable to download this video.",
+                    actionText = null,
+                )
+                log("Download failed: ${throwable.message ?: "unknown error"}")
                 log("yt-dlp state after failure: ${repository.ytDlpState()}")
             }
         }
@@ -453,6 +578,9 @@ class WhirlpoolViewModel(
     }
 
     fun toggleFavorite(video: VideoItem) {
+        val current = mutableState.value
+        val currentVideos = current.videos
+        val fallbackChannelId = current.activeChannel
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
@@ -462,11 +590,22 @@ class WhirlpoolViewModel(
                     } else {
                         repository.addFavorite(video)
                     }
-                    repository.favoriteVideos()
+                    val favorites = repository.favoriteVideos()
+                    val downloadedVideoKeys = collectDownloadedVideoKeys(
+                        videos = currentVideos + favorites,
+                        fallbackChannelId = fallbackChannelId,
+                    )
+                    FavoritesUpdateResult(
+                        favorites = favorites,
+                        downloadedVideoKeys = downloadedVideoKeys,
+                    )
                 }
-            }.onSuccess { favorites ->
-                mutableState.value = mutableState.value.copy(favorites = favorites)
-                log("Favorites updated. Total favorites: ${favorites.size}.")
+            }.onSuccess { update ->
+                mutableState.value = mutableState.value.copy(
+                    favorites = update.favorites,
+                    downloadedVideoKeys = update.downloadedVideoKeys,
+                )
+                log("Favorites updated. Total favorites: ${update.favorites.size}.")
             }.onFailure { throwable ->
                 mutableState.value = mutableState.value.copy(
                     errorText = "Could not update favorites right now.",
@@ -775,27 +914,72 @@ class WhirlpoolViewModel(
         }
     }
 
-    private fun loadSettingsAndSources() {
+    private fun loadSettingsAndSources(refreshFeed: Boolean = false) {
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
                     val persisted = repository.loadSettings()
                     val servers = repository.listSourceServers()
                     val activeBase = repository.activeApiBaseUrl()
-                    Triple(persisted, servers, activeBase)
+                    val activeChannel = persisted[SettingKeys.FEED_ACTIVE_CHANNEL]
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                    val selectedFilters = decodeFilterSelection(
+                        persisted[SettingKeys.FEED_SELECTED_FILTERS].orEmpty(),
+                    )
+                    LoadedPreferences(
+                        persisted = persisted,
+                        servers = servers,
+                        activeBase = activeBase,
+                        activeChannel = activeChannel,
+                        selectedFilters = selectedFilters,
+                    )
                 }
-            }.onSuccess { (persisted, servers, activeBase) ->
+            }.onSuccess { loaded ->
                 var settings = AppSettings()
-                persisted.forEach { (key, value) ->
+                loaded.persisted.forEach { (key, value) ->
                     settings = applySetting(settings, key, value)
                 }
                 mutableState.value = mutableState.value.copy(
                     settings = settings,
-                    sourceServers = servers,
-                    activeServerBaseUrl = activeBase,
+                    sourceServers = loaded.servers,
+                    activeServerBaseUrl = loaded.activeBase,
+                    activeChannel = loaded.activeChannel ?: mutableState.value.activeChannel,
+                    selectedFilters = loaded.selectedFilters,
                 )
+                if (refreshFeed) {
+                    refreshAll(showLoading = true)
+                }
             }.onFailure { throwable ->
                 log("Settings load failed: ${throwable.message ?: "unknown error"}")
+                if (refreshFeed) {
+                    refreshAll(showLoading = true)
+                }
+            }
+        }
+    }
+
+    private fun persistFeedState(
+        activeChannel: String,
+        selectedFilters: Map<String, Set<String>>,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val channelSaved = repository.setSetting(
+                        SettingKeys.FEED_ACTIVE_CHANNEL,
+                        activeChannel,
+                    )
+                    val filtersSaved = repository.setSetting(
+                        SettingKeys.FEED_SELECTED_FILTERS,
+                        encodeFilterSelection(selectedFilters),
+                    )
+                    if (!channelSaved || !filtersSaved) {
+                        throw IOException("Unable to save feed filter settings.")
+                    }
+                }
+            }.onFailure { throwable ->
+                log("Persist feed settings failed: ${throwable.message ?: "unknown error"}")
             }
         }
     }
@@ -842,6 +1026,53 @@ class WhirlpoolViewModel(
     private fun refreshVideosInBackground() {
         cancelDebouncedSearch()
         refreshAll(showLoading = false)
+    }
+
+    private fun selectedChannelYtdlpCommand(): String? {
+        val selectedChannel = mutableState.value.channelDetails.firstOrNull { channel ->
+            channel.id == mutableState.value.activeChannel
+        }
+        return selectedChannel
+            ?.ytdlpCommand
+            ?.takeIf { command -> command.isNotBlank() }
+    }
+
+    private fun resolveVideoChannelId(
+        video: VideoItem,
+        fallbackChannelId: String = mutableState.value.activeChannel,
+    ): String {
+        return video.network
+            ?.trim()
+            ?.takeIf { value -> value.isNotEmpty() }
+            ?: fallbackChannelId
+    }
+
+    private fun collectDownloadedVideoKeys(
+        videos: List<VideoItem>,
+        fallbackChannelId: String,
+    ): Set<String> {
+        if (videos.isEmpty()) {
+            return emptySet()
+        }
+        return videos.mapNotNull { video ->
+            val videoId = video.id.trim()
+            if (videoId.isEmpty()) {
+                return@mapNotNull null
+            }
+            val channelId = resolveVideoChannelId(
+                video = video,
+                fallbackChannelId = fallbackChannelId,
+            )
+            val isDownloaded = repository.downloadedVideoPath(
+                channelId = channelId,
+                videoId = videoId,
+            ) != null
+            if (isDownloaded) {
+                videoDownloadUiKey(channelId = channelId, videoId = videoId)
+            } else {
+                null
+            }
+        }.toSet()
     }
 
     private fun normalizeChannels(status: com.whirlpool.engine.StatusSummary): List<StatusChannel> {
@@ -970,6 +1201,29 @@ class WhirlpoolViewModel(
         cancelDebouncedSearch()
         super.onCleared()
     }
+
+    private data class LoadedPreferences(
+        val persisted: Map<String, String>,
+        val servers: List<SourceServerConfig>,
+        val activeBase: String,
+        val activeChannel: String?,
+        val selectedFilters: Map<String, Set<String>>,
+    )
+
+    private data class PagedVideosResult(
+        val discovered: List<VideoItem>,
+        val downloadedVideoKeys: Set<String>,
+    )
+
+    private data class FavoritesUpdateResult(
+        val favorites: List<VideoItem>,
+        val downloadedVideoKeys: Set<String>,
+    )
+
+    private sealed interface PlaybackLaunch {
+        data class Local(val path: String) : PlaybackLaunch
+        data class Remote(val resolution: PlaybackResolution) : PlaybackLaunch
+    }
 }
 
 private fun normalizePreferenceToken(value: String): String {
@@ -1058,4 +1312,87 @@ internal fun decodeStringList(value: String): List<String> {
         .split("\n")
         .map { it.trim() }
         .filter { it.isNotEmpty() }
+}
+
+internal fun encodeFilterSelection(selection: Map<String, Set<String>>): String {
+    return selection.entries
+        .mapNotNull { (optionId, selectedIds) ->
+            val normalizedOptionId = optionId.trim()
+            if (normalizedOptionId.isEmpty()) {
+                return@mapNotNull null
+            }
+            val normalizedChoices = selectedIds
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+            normalizedOptionId to normalizedChoices
+        }
+        .sortedBy { (optionId, _) -> optionId }
+        .joinToString(separator = "&") { (optionId, selectedIds) ->
+            val encodedOptionId = urlEncodeToken(optionId)
+            if (selectedIds.isEmpty()) {
+                "$encodedOptionId="
+            } else {
+                val encodedChoices = selectedIds
+                    .sorted()
+                    .joinToString(separator = ",") { choiceId ->
+                        urlEncodeToken(choiceId)
+                    }
+                "$encodedOptionId=$encodedChoices"
+            }
+        }
+}
+
+internal fun decodeFilterSelection(value: String): Map<String, Set<String>> {
+    if (value.isBlank()) {
+        return emptyMap()
+    }
+
+    val out = linkedMapOf<String, Set<String>>()
+    value.split("&")
+        .forEach { entry ->
+            val trimmed = entry.trim()
+            if (trimmed.isEmpty()) {
+                return@forEach
+            }
+
+            val separator = trimmed.indexOf('=')
+            val encodedOptionId = if (separator >= 0) {
+                trimmed.substring(0, separator)
+            } else {
+                trimmed
+            }
+            val encodedChoices = if (separator >= 0) {
+                trimmed.substring(separator + 1)
+            } else {
+                ""
+            }
+
+            val optionId = urlDecodeToken(encodedOptionId).trim()
+            if (optionId.isEmpty()) {
+                return@forEach
+            }
+
+            val selectedIds = if (encodedChoices.isBlank()) {
+                emptySet()
+            } else {
+                encodedChoices
+                    .split(",")
+                    .map { token -> urlDecodeToken(token).trim() }
+                    .filter { it.isNotEmpty() }
+                    .toSet()
+            }
+            out[optionId] = selectedIds
+        }
+    return out
+}
+
+private fun urlEncodeToken(value: String): String {
+    return URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
+}
+
+private fun urlDecodeToken(value: String): String {
+    return runCatching {
+        URLDecoder.decode(value, StandardCharsets.UTF_8.toString())
+    }.getOrElse { value }
 }

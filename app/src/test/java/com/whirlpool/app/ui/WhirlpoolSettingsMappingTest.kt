@@ -31,4 +31,33 @@ class WhirlpoolSettingsMappingTest {
 
         assertEquals(listOf("cats", "dogs", "birds"), decoded)
     }
+
+    @Test
+    fun encodeDecodeFilterSelection_roundtrip() {
+        val selection = linkedMapOf(
+            "sort" to setOf("latest"),
+            "duration" to emptySet(),
+            "format option" to setOf("mp4", "webm"),
+        )
+
+        val encoded = encodeFilterSelection(selection)
+        val decoded = decodeFilterSelection(encoded)
+
+        assertEquals(
+            linkedMapOf(
+                "duration" to emptySet(),
+                "format option" to setOf("mp4", "webm"),
+                "sort" to setOf("latest"),
+            ),
+            decoded,
+        )
+    }
+
+    @Test
+    fun decodeFilterSelection_invalidPayload_returnsBestEffort() {
+        val decoded = decodeFilterSelection("sort=latest&&bad%zz=oops&duration=")
+
+        assertEquals(setOf("latest"), decoded["sort"])
+        assertEquals(emptySet<String>(), decoded["duration"])
+    }
 }

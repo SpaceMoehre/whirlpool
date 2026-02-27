@@ -15,6 +15,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.ui.PlayerView
@@ -68,7 +69,8 @@ fun VideoPlayerSurface(
             httpFactory.setDefaultRequestProperties(defaultHeaders)
         }
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory)
+        val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
         val mediaItem = MediaItem.fromUri(Uri.parse(url))
         val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
 

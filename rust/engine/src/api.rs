@@ -2,11 +2,12 @@ use std::collections::HashMap;
 
 use reqwest::StatusCode;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::curl_cffi::fetch_with_curl_cffi;
 use crate::errors::EngineError;
 use crate::models::{
-    ApiStatusChannel, ApiStatusResponse, ApiVideoEnvelope, ApiVideoRecord, EngineConfig,
+    ApiStatusChannel, ApiStatusResponse, ApiVideoRecord, EngineConfig,
     FilterSelection, StatusChannel, StatusChoice, StatusFilterOption, StatusSummary, VideoItem,
 };
 
@@ -326,31 +327,48 @@ fn build_videos_payload(
 }
 
 fn parse_videos(body: &str, default_channel_id: &str) -> Result<Vec<VideoItem>, EngineError> {
-    if let Ok(envelope) = serde_json::from_str::<ApiVideoEnvelope>(body) {
-        let source = if envelope.videos.is_empty() {
-            envelope.items
-        } else {
-            envelope.videos
-        };
-        return Ok(source
-            .into_iter()
-            .map(|record| map_video_record(record, default_channel_id))
-            .collect());
+    let root = serde_json::from_str::<Value>(body)?;
+    match root {
+        Value::Object(obj) => {
+            if let Some(items) = obj.get("videos").and_then(Value::as_array) {
+                return parse_video_array(items, default_channel_id);
+            }
+            if let Some(items) = obj.get("items").and_then(Value::as_array) {
+                return parse_video_array(items, default_channel_id);
+            }
+            Err(EngineError::Serialization {
+                detail: "unexpected videos payload shape".to_string(),
+            })
+        }
+        Value::Array(items) => parse_video_array(&items, default_channel_id),
+        _ => Err(EngineError::Serialization {
+            detail: "unexpected videos payload shape".to_string(),
+        }),
     }
-
-    if let Ok(videos) = serde_json::from_str::<Vec<ApiVideoRecord>>(body) {
-        return Ok(videos
-            .into_iter()
-            .map(|record| map_video_record(record, default_channel_id))
-            .collect());
-    }
-
-    Err(EngineError::Serialization {
-        detail: "unexpected videos payload shape".to_string(),
-    })
 }
 
-fn map_video_record(record: ApiVideoRecord, default_channel_id: &str) -> VideoItem {
+fn parse_video_array(
+    items: &[Value],
+    default_channel_id: &str,
+) -> Result<Vec<VideoItem>, EngineError> {
+    items
+        .iter()
+        .map(|raw| {
+            let record = serde_json::from_value::<ApiVideoRecord>(raw.clone())?;
+            Ok(map_video_record(
+                record,
+                default_channel_id,
+                serde_json::to_string_pretty(raw).ok(),
+            ))
+        })
+        .collect()
+}
+
+fn map_video_record(
+    record: ApiVideoRecord,
+    default_channel_id: &str,
+    raw_json: Option<String>,
+) -> VideoItem {
     let page_url = record.url.unwrap_or_default();
     let id = record
         .id
@@ -370,6 +388,7 @@ fn map_video_record(record: ApiVideoRecord, default_channel_id: &str) -> VideoIt
         author_name: record.author_name,
         extractor: record.extractor,
         view_count: record.view_count,
+        raw_json,
     }
 }
 
@@ -510,6 +529,14 @@ mod tests {
         );
         assert_eq!(videos[0].author_name.as_deref(), Some("Unknown"));
         assert_eq!(videos[0].view_count, Some(14_622_653));
+        assert!(videos[0]
+            .raw_json
+            .as_deref()
+            .is_some_and(|payload| payload.contains("\"hashedUrl\"")));
+        assert!(videos[0]
+            .raw_json
+            .as_deref()
+            .is_some_and(|payload| payload.contains("\"uploaderId\": \"unknown\"")));
     }
 
     #[test]
@@ -538,6 +565,10 @@ mod tests {
             Some("https://img.example.com/1.jpg")
         );
         assert_eq!(videos[0].author_name.as_deref(), Some("Uploader"));
+        assert!(videos[0]
+            .raw_json
+            .as_deref()
+            .is_some_and(|payload| payload.contains("\"channel\": \"catflix\"")));
     }
 
     #[test]

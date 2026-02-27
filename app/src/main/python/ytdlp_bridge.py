@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import shlex
 import time
 from typing import Any, Dict, Iterable, List, Optional
@@ -211,9 +213,10 @@ def _build_options(logger: _CollectorLogger, ytdlp_command: Optional[str]) -> Di
 
 
 def _extract_info(page_url: str, options: Dict[str, Any], logger: _CollectorLogger) -> Dict[str, Any]:
+    download_enabled = not bool(options.get("skip_download"))
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(page_url, download=False)
+            info = ydl.extract_info(page_url, download=download_enabled)
     except Exception as err:
         detail = f"{type(err).__name__}: {err}"
         logs = " | ".join(logger.messages[-3:])
@@ -278,4 +281,192 @@ def extract(page_url: str, ytdlp_command: Optional[str] = None) -> str:
         "resolvedAtEpochMs": int(time.time() * 1000),
     }
 
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _sanitize_filename_hint(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "whirlpool-video"
+    text = re.sub(r"[\\/:*?\"<>|\x00-\x1F]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    if not text:
+        text = "whirlpool-video"
+    if len(text) > 90:
+        text = text[:90].rstrip(" .")
+    return text or "whirlpool-video"
+
+
+def _build_download_options(
+    logger: _CollectorLogger,
+    output_dir: str,
+    filename_hint: Optional[str],
+    ytdlp_command: Optional[str],
+) -> Dict[str, Any]:
+    options = _build_options(logger, ytdlp_command)
+    safe_stem = _sanitize_filename_hint(filename_hint)
+    outtmpl = os.path.join(output_dir, f"{safe_stem}-%(id)s.%(ext)s")
+    options.update(
+        {
+            "skip_download": False,
+            "format": (
+                "best[ext=mp4][vcodec!=none][acodec!=none]/"
+                "best[vcodec!=none][acodec!=none]/"
+                "best"
+            ),
+            "outtmpl": {"default": outtmpl},
+            "paths": {"home": output_dir},
+            "overwrites": False,
+            "nopart": False,
+            "continuedl": True,
+            "prefer_ffmpeg": False,
+            "hls_prefer_native": True,
+        }
+    )
+    return options
+
+
+def _iter_downloaded_file_candidates(info: Dict[str, Any]) -> Iterable[str]:
+    direct = info.get("filepath")
+    if isinstance(direct, str) and direct.strip():
+        yield direct
+    fallback = info.get("_filename")
+    if isinstance(fallback, str) and fallback.strip():
+        yield fallback
+
+    for key in ("requested_downloads", "requested_formats"):
+        entries = info.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("filepath")
+            if isinstance(path, str) and path.strip():
+                yield path
+
+    entries = info.get("entries")
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                yield from _iter_downloaded_file_candidates(entry)
+
+
+def _resolve_downloaded_path(
+    info: Dict[str, Any],
+    output_dir: str,
+    min_mtime: Optional[float] = None,
+) -> Optional[str]:
+    for candidate in _iter_downloaded_file_candidates(info):
+        path = os.path.abspath(candidate)
+        if os.path.isfile(path):
+            if min_mtime is not None and os.path.getmtime(path) + 1 < min_mtime:
+                continue
+            return path
+
+    try:
+        files = [
+            os.path.join(output_dir, name)
+            for name in os.listdir(output_dir)
+            if os.path.isfile(os.path.join(output_dir, name))
+        ]
+    except OSError:
+        return None
+
+    mp4_files = [path for path in files if path.lower().endswith(".mp4")]
+    ranked = mp4_files or files
+    if not ranked:
+        return None
+    if min_mtime is not None:
+        ranked = [path for path in ranked if os.path.getmtime(path) + 1 >= min_mtime]
+        if not ranked:
+            return None
+    return max(ranked, key=lambda path: os.path.getmtime(path))
+
+
+def download(
+    page_url: str,
+    output_dir: str,
+    filename_hint: Optional[str] = None,
+    ytdlp_command: Optional[str] = None,
+) -> str:
+    if not _is_http_url(page_url):
+        raise RuntimeError("yt-dlp download failed: page url must be http(s)")
+
+    normalized_output_dir = str(output_dir or "").strip()
+    if not normalized_output_dir:
+        raise RuntimeError("yt-dlp download failed: output directory is required")
+    os.makedirs(normalized_output_dir, exist_ok=True)
+    started_at = time.time()
+
+    logger = _CollectorLogger()
+    normalized_command = (ytdlp_command or "").strip()
+    if normalized_command:
+        try:
+            info = _extract_info(
+                page_url,
+                _build_download_options(
+                    logger=logger,
+                    output_dir=normalized_output_dir,
+                    filename_hint=filename_hint,
+                    ytdlp_command=normalized_command,
+                ),
+                logger,
+            )
+        except (Exception, SystemExit) as custom_err:
+            logger.warning(
+                "custom ytdlpCommand failed for download, falling back to defaults: "
+                f"{type(custom_err).__name__}: {custom_err}"
+            )
+            info = _extract_info(
+                page_url,
+                _build_download_options(
+                    logger=logger,
+                    output_dir=normalized_output_dir,
+                    filename_hint=filename_hint,
+                    ytdlp_command=None,
+                ),
+                logger,
+            )
+    else:
+        info = _extract_info(
+            page_url,
+            _build_download_options(
+                logger=logger,
+                output_dir=normalized_output_dir,
+                filename_hint=filename_hint,
+                ytdlp_command=None,
+            ),
+            logger,
+        )
+
+    downloaded_path = _resolve_downloaded_path(
+        info,
+        normalized_output_dir,
+        min_mtime=started_at,
+    )
+    if not downloaded_path:
+        try:
+            output_listing = sorted(os.listdir(normalized_output_dir))[-10:]
+        except OSError:
+            output_listing = []
+        diagnostics_tail = logger.messages[-8:]
+        detail_parts = []
+        if output_listing:
+            detail_parts.append(f"files={output_listing}")
+        if diagnostics_tail:
+            detail_parts.append(f"logs={diagnostics_tail}")
+        detail = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+        raise RuntimeError(f"yt-dlp download failed: no output file was produced{detail}")
+
+    payload = {
+        "id": str(info.get("id") or page_url),
+        "title": str(info.get("title") or filename_hint or "Untitled"),
+        "pageUrl": str(info.get("webpage_url") or page_url),
+        "savedPath": downloaded_path,
+        "savedName": os.path.basename(downloaded_path),
+        "ytDlpVersion": YTDLP_VERSION,
+        "diagnostics": logger.messages[-20:],
+        "savedAtEpochMs": int(time.time() * 1000),
+    }
     return json.dumps(payload, ensure_ascii=False)
