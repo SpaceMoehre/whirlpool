@@ -42,7 +42,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # sdkmanager exits early after consuming enough input, which can cause
+          # "yes" to exit with SIGPIPE; ignore that expected pipe-close behavior.
+          set +o pipefail
           yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
