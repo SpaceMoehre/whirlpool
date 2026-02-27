@@ -1,0 +1,157 @@
+name: Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 29.0.14206865
+      JAVA_VERSION: "17"
+      PYTHON_VERSION: "3.11"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK/NDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${NDK_VERSION}"
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust/engine -> target
+
+      - name: Install cargo-ndk
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+
+      - name: Generate UniFFI Kotlin bindings
+        shell: bash
+        run: scripts/generate_uniffi_kotlin.sh
+
+      - name: Build Rust Android JNI libraries
+        shell: bash
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          scripts/build_android_libs.sh
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Prepare release signing key
+        id: signing
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          KEYSTORE_PATH="${RUNNER_TEMP}/release.keystore"
+
+          if [[ -n "${RELEASE_KEYSTORE_B64}" && -n "${RELEASE_KEYSTORE_PASSWORD}" && -n "${RELEASE_KEY_ALIAS}" && -n "${RELEASE_KEY_PASSWORD}" ]]; then
+            echo "${RELEASE_KEYSTORE_B64}" | base64 --decode > "${KEYSTORE_PATH}"
+            echo "mode=provided" >> "${GITHUB_OUTPUT}"
+            echo "Using repository secrets for release signing."
+            STORE_PASSWORD="${RELEASE_KEYSTORE_PASSWORD}"
+            KEY_ALIAS="${RELEASE_KEY_ALIAS}"
+            KEY_PASSWORD="${RELEASE_KEY_PASSWORD}"
+          else
+            keytool -genkeypair \
+              -keystore "${KEYSTORE_PATH}" \
+              -storepass android \
+              -alias ci-release \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 3650 \
+              -dname "CN=Whirlpool CI, OU=CI, O=Whirlpool, L=CI, S=CI, C=US"
+            echo "mode=ephemeral" >> "${GITHUB_OUTPUT}"
+            echo "No release signing secrets provided, using ephemeral CI key."
+            STORE_PASSWORD="android"
+            KEY_ALIAS="ci-release"
+            KEY_PASSWORD="android"
+          fi
+
+          echo "store_file=${KEYSTORE_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "store_password=${STORE_PASSWORD}" >> "${GITHUB_OUTPUT}"
+          echo "key_alias=${KEY_ALIAS}" >> "${GITHUB_OUTPUT}"
+          echo "key_password=${KEY_PASSWORD}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build signed release APK and AAB
+        run: |
+          ./gradlew :app:assembleRelease :app:bundleRelease \
+            -Pandroid.injected.signing.store.file="${{ steps.signing.outputs.store_file }}" \
+            -Pandroid.injected.signing.store.password="${{ steps.signing.outputs.store_password }}" \
+            -Pandroid.injected.signing.key.alias="${{ steps.signing.outputs.key_alias }}" \
+            -Pandroid.injected.signing.key.password="${{ steps.signing.outputs.key_password }}"
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: whirlpool-android-build
+          if-no-files-found: error
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+
+      - name: Build summary
+        shell: bash
+        run: |
+          {
+            echo "### Android build outputs"
+            echo ""
+            echo "- Debug APK: \`app/build/outputs/apk/debug/app-debug.apk\`"
+            echo "- Release APK(s): \`app/build/outputs/apk/release/\`"
+            echo "- Release bundle(s): \`app/build/outputs/bundle/release/\`"
+            echo ""
+            echo "Release signing mode: \`${{ steps.signing.outputs.mode }}\`"
+            echo ""
+            echo "If signing mode is \`ephemeral\`, installable artifacts are valid for testing only."
+          } >> "${GITHUB_STEP_SUMMARY}"
