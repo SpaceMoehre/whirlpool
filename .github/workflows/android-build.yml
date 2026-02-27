@@ -18,6 +18,8 @@ jobs:
       NDK_VERSION: 29.0.14206865
       JAVA_VERSION: "17"
       PYTHON_VERSION: "3.11"
+      CHAQUOPY_BUILD_PYTHON: python3.11
+      CHAQUOPY_PYTHON_VERSION: "3.11"
 
     steps:
       - name: Checkout
@@ -39,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3.11 --version
+          "${CHAQUOPY_BUILD_PYTHON}" --version
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3

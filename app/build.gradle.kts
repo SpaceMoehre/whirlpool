@@ -1,9 +1,67 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.chaquo.python")
 }
+
+fun findPythonCommand(): String? {
+    val override = System.getenv("CHAQUOPY_BUILD_PYTHON")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    if (override != null) {
+        return override
+    }
+
+    val pathEntries = System.getenv("PATH")
+        .orEmpty()
+        .split(File.pathSeparatorChar)
+    val candidates = listOf("python3.11", "python3", "python")
+
+    fun commandExists(command: String): Boolean {
+        if (command.contains(File.separatorChar)) {
+            val file = File(command)
+            return file.exists() && file.canExecute()
+        }
+        return pathEntries.any { entry ->
+            val file = File(entry, command)
+            file.exists() && file.canExecute()
+        }
+    }
+
+    return candidates.firstOrNull(::commandExists)
+}
+
+fun detectPythonMinorVersion(command: String): String? {
+    val process = runCatching {
+        ProcessBuilder(
+            command,
+            "-c",
+            "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
+        )
+            .redirectErrorStream(true)
+            .start()
+    }.getOrNull() ?: return null
+
+    return runCatching {
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        val exitCode = process.waitFor()
+        if (exitCode == 0 && Regex("""\d+\.\d+""").matches(output)) {
+            output
+        } else {
+            null
+        }
+    }.getOrNull()
+}
+
+val chaquopyBuildPython = findPythonCommand()
+val chaquopyPythonVersion = System.getenv("CHAQUOPY_PYTHON_VERSION")
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?: chaquopyBuildPython?.let(::detectPythonMinorVersion)
+    ?: "3.11"
 
 android {
     namespace = "com.whirlpool.app"
@@ -59,8 +117,10 @@ android {
 
 chaquopy {
     defaultConfig {
-        buildPython("python3.11")
-        version = "3.11"
+        if (chaquopyBuildPython != null) {
+            buildPython(chaquopyBuildPython)
+        }
+        version = chaquopyPythonVersion
         pip {
             install("yt-dlp")
         }

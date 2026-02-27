@@ -26,8 +26,8 @@ class WhirlpoolSettingsMappingTest {
     @Test
     fun encodeDecodeStringList_roundtrip() {
         val raw = listOf("cats", "dogs", "  birds  ")
-        val encoded = encodeStringList(raw)
-        val decoded = decodeStringList(encoded)
+        val encoded = FeedPreferenceCodec.encodeStringList(raw)
+        val decoded = FeedPreferenceCodec.decodeStringList(encoded)
 
         assertEquals(listOf("cats", "dogs", "birds"), decoded)
     }
@@ -40,8 +40,8 @@ class WhirlpoolSettingsMappingTest {
             "format option" to setOf("mp4", "webm"),
         )
 
-        val encoded = encodeFilterSelection(selection)
-        val decoded = decodeFilterSelection(encoded)
+        val encoded = FeedPreferenceCodec.encodeFilterSelection(selection)
+        val decoded = FeedPreferenceCodec.decodeFilterSelection(encoded)
 
         assertEquals(
             linkedMapOf(
@@ -55,7 +55,7 @@ class WhirlpoolSettingsMappingTest {
 
     @Test
     fun decodeFilterSelection_invalidPayload_returnsBestEffort() {
-        val decoded = decodeFilterSelection("sort=latest&&bad%zz=oops&duration=")
+        val decoded = FeedPreferenceCodec.decodeFilterSelection("sort=latest&&bad%zz=oops&duration=")
 
         assertEquals(setOf("latest"), decoded["sort"])
         assertEquals(emptySet<String>(), decoded["duration"])
